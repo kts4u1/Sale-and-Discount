@@ -218,3 +218,16 @@ describe('참가격 판매점 주소·본사', () => {
     expect(spreadSample([1, 2], 5)).toEqual([1, 2]);
   });
 });
+
+describe('전국 체인 매장 칸 나누기', async () => {
+  const { koreaBoxes, chainBoxQuery } = await import('../src/chain-stores.ts');
+  it('서울·제주·울릉도를 덮는다', () => {
+    const boxes = koreaBoxes();
+    const covers = (lat: number, lng: number) =>
+      boxes.some(([s, w, n, e]) => lat >= s && lat < n && lng >= w && lng < e);
+    expect(covers(37.5665, 126.978)).toBe(true);
+    expect(covers(33.4996, 126.5312)).toBe(true);
+    expect(covers(37.4842, 130.9058)).toBe(true);
+    expect(chainBoxQuery([37.5, 126.5, 38, 127])).toContain('[bbox:37.5,126.5,38,127]');
+  });
+});

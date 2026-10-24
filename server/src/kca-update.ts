@@ -446,9 +446,8 @@ export async function updateKcaSnapshot(options: UpdateOptions): Promise<UpdateR
       }
     }
   } else if (options.offline) {
-    const saved = await readJson<{ fetchedAt: string; stores: KcaChainStoreTuple[] }>(
-      path.join(options.rawDir, 'chain-stores.json'),
-    ).catch(() => undefined);
+    // 오프라인: 보관해 둔 칸만 쓴다 (새로 받지 않음)
+    const saved = await loadChainStores({ rawDir: options.rawDir, endpoints: [], maxAgeMs: Infinity, log });
     if (saved) {
       chainStoresUpdatedAt = saved.fetchedAt;
       for (const t of saved.stores) {
