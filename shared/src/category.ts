@@ -1,4 +1,4 @@
-import type { CategoryId } from '@sale-radar/shared';
+import type { CategoryId } from './types.ts';
 
 /* ------------------------------ 브랜드 인식 ------------------------------ */
 

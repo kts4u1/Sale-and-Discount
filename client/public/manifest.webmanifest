@@ -3,9 +3,17 @@
   "short_name": "세일레이더",
   "description": "내 위치 주변 100m~1km 안의 할인, 1+1, 타임세일, 마감할인 행사 찾기",
   "lang": "ko",
-  "start_url": "/",
+  "start_url": "./",
   "display": "standalone",
   "background_color": "#ffffff",
   "theme_color": "#ff5a36",
-  "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "scope": "./"
 }

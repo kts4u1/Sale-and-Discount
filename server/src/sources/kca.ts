@@ -1,28 +1,38 @@
 import path from 'node:path';
 import {
   addDays,
-  distanceMeters,
+  categoryFromText,
+  detectBrand,
+  kcaCompare,
+  kcaDeals,
+  kcaNearbyStores,
+  kcaTileFile,
+  kcaTilesForCircle,
   kstNow,
   normalizeDate,
-  normalizeText,
+  KCA_SNAPSHOT_VERSION,
   type CategoryId,
   type Deal,
+  type KcaManifest,
+  type KcaProductsFile,
+  type KcaTileFile,
   type LatLng,
   type PriceCompareGroup,
-  type ReverseGeocodeResult,
   type Store,
+  type StoreWithDistance,
 } from '@sale-radar/shared';
-import type { AppConfigEnv } from '../config.ts';
-import { TtlCache, diskCached, readJson, writeJsonAtomic } from '../lib/cache.ts';
-import { categoryFromText, detectBrand } from '../lib/category.ts';
-import { fetchText, mapLimit } from '../lib/http.ts';
-import { parseOpenApiItems } from '../lib/xml.ts';
+import { readJson } from '../lib/cache.ts';
+import { HttpError, fetchText } from '../lib/http.ts';
+import { OpenApiError, parseOpenApiItems } from '../lib/xml.ts';
 
 /**
  * 한국소비자원 참가격 (생필품 가격 정보) - 공공데이터포털
  * https://www.data.go.kr/data/15158701/openapi.do
  * 전국 대형마트·SSM·백화점·편의점·전통시장의 생필품 가격을 매주 금요일 기준으로 조사.
  * 각 가격에 할인 여부(goodDcYn), 할인 기간, 1+1 여부(plusoneYn)가 들어 있다.
+ *
+ * - KcaClient : API 호출 (하루 한 번 도는 업데이트 작업만 쓴다, src/kca-update.ts)
+ * - KcaSource : 업데이트 작업이 만든 스냅샷 파일을 읽어 검색에 쓴다 (검색할 때 API 를 부르지 않음)
  */
 
 export interface KcaStoreRaw {
@@ -177,369 +187,192 @@ export function recentFridays(count: number, today = kstNow().date): string[] {
   return Array.from({ length: count }, (_, i) => addDays(latest, -7 * i));
 }
 
-export type KcaCompareGroup = Omit<PriceCompareGroup, 'entries'> & {
-  entries: { store: KcaStore & { distance: number }; price: KcaPrice }[];
-};
+/* -------------------------------- API 호출 -------------------------------- */
 
-export interface Geocoder {
-  addressToLatLng(address: string): Promise<LatLng | null>;
-  reverse(center: LatLng): Promise<ReverseGeocodeResult>;
-  /** 대량 변환이 가능한지 (카카오: 가능, Nominatim: 초당 1회라 불가) */
-  bulk: boolean;
-}
+/** 다시 시도해도 소용없는 오류 (인증키·활용신청 문제) */
+const FATAL =
+  /SERVICE_KEY_IS_NOT_REGISTERED|SERVICE_ACCESS_DENIED|DEADLINE_HAS_EXPIRED|UNREGISTERED_IP|SERVICE_KEY_IS_NULL|NO_OPENAPI_SERVICE|^(20|30|31|32|33|12)$/;
 
-export interface KcaNearby {
-  stores: (KcaStore & { distance: number })[];
-  pendingGeocode: number;
-}
-
-export class KcaSource {
-  private stores?: Promise<KcaStore[]>;
-  private products?: Promise<Map<string, KcaProduct>>;
-  private priceCache = new TtlCache<KcaPrice[]>(12 * 3_600_000, 3000);
-  private latestDay = new TtlCache<string>(6 * 3_600_000, 1);
-  private geocodeFile: string;
-  private geocoded?: Promise<Record<string, LatLng | null>>;
-  private geocodingRegions = new Set<string>();
-
+export class KcaApiError extends Error {
   constructor(
-    private readonly config: AppConfigEnv,
-    private readonly geocoder?: Geocoder,
+    message: string,
+    readonly fatal: boolean,
   ) {
-    this.geocodeFile = path.join(config.dataDir, 'cache', 'kca-geocode.json');
+    super(message);
+    this.name = 'KcaApiError';
   }
+}
 
-  get enabled(): boolean {
-    return Boolean(this.config.dataGoKrKey);
+/** 공공데이터포털 키는 Encoding(%인코딩됨)·Decoding 두 모양이 있어 어느 쪽을 넣어도 되게 원래 값으로 돌린다 */
+export function normalizeServiceKey(key: string): string {
+  const k = key.trim();
+  if (!/%[0-9A-Fa-f]{2}/.test(k)) return k;
+  try {
+    return decodeURIComponent(k);
+  } catch {
+    return k;
   }
+}
 
-  private serviceKey(): string {
-    const key = this.config.dataGoKrKey ?? '';
-    // 포털의 "Encoding" 키를 넣어도 동작하도록 한 번 풀어 준다
-    try {
-      return key.includes('%') ? decodeURIComponent(key) : key;
-    } catch {
-      return key;
-    }
-  }
+export interface KcaClientOptions {
+  key: string;
+  baseUrl: string;
+  retries?: number;
+  retryDelayMs?: number;
+  timeoutMs?: number;
+}
+
+export class KcaClient {
+  readonly calls = { total: 0, failed: 0 };
+
+  constructor(private readonly options: KcaClientOptions) {}
 
   private async call(
     op: string,
     params: Record<string, string>,
     keyParam = 'ServiceKey',
   ): Promise<Record<string, string>[]> {
-    const qs = new URLSearchParams({ [keyParam]: this.serviceKey(), ...params });
-    const xml = await fetchText(`${this.config.kcaBaseUrl}/${op}?${qs}`, { timeoutMs: 15_000 });
-    return parseOpenApiItems(xml);
-  }
-
-  /* ------------------------------ 기준 데이터 ------------------------------ */
-
-  async allStores(): Promise<KcaStore[]> {
-    this.stores ??= (async () => {
-      const raw = await diskCached(path.join(this.config.dataDir, 'cache', 'kca-stores.json'), 3 * 86_400_000, () =>
-        this.call('getStoreInfoSvc.do', {}),
-      );
-      const geocoded = await this.loadGeocoded();
-      return (raw as unknown as KcaStoreRaw[])
-        .filter((r) => r.entpId && r.entpName)
-        .map((r) => {
-          const store = toKcaStore(r);
-          const fixed = geocoded[store.entpId];
-          if (!store.located && fixed) Object.assign(store, { lat: fixed.lat, lng: fixed.lng, located: true });
-          return store;
-        });
-    })().catch((err) => {
-      this.stores = undefined; // 다음 요청에서 다시 시도
-      throw err;
-    });
-    return this.stores;
-  }
-
-  async allProducts(): Promise<Map<string, KcaProduct>> {
-    this.products ??= (async () => {
-      const raw = await diskCached(path.join(this.config.dataDir, 'cache', 'kca-products.json'), 7 * 86_400_000, () =>
-        this.call('getProductInfoSvc.do', {}),
-      );
-      return new Map(
-        (raw as unknown as KcaProductRaw[])
-          .filter((r) => r.goodId && r.goodName)
-          .map((r) => [r.goodId, toKcaProduct(r)]),
-      );
-    })().catch((err) => {
-      this.products = undefined;
-      throw err;
-    });
-    return this.products;
-  }
-
-  async storePrices(entpId: string, inspectDay: string): Promise<KcaPrice[]> {
-    return this.priceCache.getOrLoad(`${entpId}:${inspectDay}`, async () => {
-      const items = await this.call(
-        'getProductPriceInfoSvc',
-        { goodInspectDay: inspectDay.replaceAll('-', ''), entpId },
-        'serviceKey',
-      );
-      return (items as unknown as KcaPriceRaw[])
-        .map((r) => toKcaPrice(r, inspectDay))
-        .filter((p): p is KcaPrice => Boolean(p));
-    });
-  }
-
-  /** 데이터가 올라온 가장 최근 조사일(금요일)을 찾는다 */
-  async latestInspectDay(probeEntpIds: string[]): Promise<string | undefined> {
-    const cached = this.latestDay.get('latest');
-    if (cached) return cached;
-    for (const day of recentFridays(5)) {
-      for (const entpId of probeEntpIds.slice(0, 3)) {
-        const prices = await this.storePrices(entpId, day).catch(() => []);
-        if (prices.length > 0) {
-          this.latestDay.set('latest', day);
-          return day;
-        }
-      }
-    }
-    return undefined;
-  }
-
-  /* ------------------------------- 좌표 보정 ------------------------------- */
-
-  private loadGeocoded(): Promise<Record<string, LatLng | null>> {
-    this.geocoded ??= readJson<Record<string, LatLng | null>>(this.geocodeFile).then((v) => v ?? {});
-    return this.geocoded;
-  }
-
-  private saveTimer?: NodeJS.Timeout;
-  private scheduleSave(map: Record<string, LatLng | null>) {
-    clearTimeout(this.saveTimer);
-    this.saveTimer = setTimeout(() => {
-      writeJsonAtomic(this.geocodeFile, map).catch((err) => console.warn('[kca] 좌표 캐시 저장 실패', err));
-    }, 2000);
-    this.saveTimer.unref?.();
-  }
-
-  private async geocodeStores(stores: KcaStore[], budgetMs: number): Promise<void> {
-    if (!this.geocoder || stores.length === 0) return;
-    const map = await this.loadGeocoded();
-    const todo = stores.filter((s) => !s.located && !(s.entpId in map));
-    if (todo.length === 0) return;
-    const deadline = Date.now() + budgetMs;
-    await mapLimit(todo, this.geocoder.bulk ? 4 : 1, async (store) => {
-      if (Date.now() > deadline) return;
-      const address = store.roadAddress ?? store.address;
-      if (!address) {
-        map[store.entpId] = null;
-        return;
-      }
+    const qs = new URLSearchParams({ [keyParam]: normalizeServiceKey(this.options.key), ...params });
+    const url = `${this.options.baseUrl}/${op}?${qs}`;
+    const retries = this.options.retries ?? 3;
+    let lastErr: unknown;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      this.calls.total++;
       try {
-        const pos = await this.geocoder!.addressToLatLng(address);
-        map[store.entpId] = pos;
-        if (pos) Object.assign(store, { lat: pos.lat, lng: pos.lng, located: true });
-      } catch {
-        // 일시적인 오류는 다음에 다시 시도
+        const xml = await fetchText(url, { timeoutMs: this.options.timeoutMs ?? 60_000 });
+        return parseOpenApiItems(xml);
+      } catch (err) {
+        this.calls.failed++;
+        const msg = err instanceof Error ? err.message : String(err);
+        const code = err instanceof OpenApiError ? (err.code ?? '') : '';
+        if (FATAL.test(msg) || FATAL.test(code)) {
+          throw new KcaApiError(
+            `인증키 또는 활용신청 문제: ${msg} (공공데이터포털에서 활용신청 승인 여부와 인증키를 확인하세요. 승인 직후에는 1~2시간 걸릴 수 있어요)`,
+            true,
+          );
+        }
+        if (err instanceof HttpError && (err.status === 401 || err.status === 403)) {
+          throw new KcaApiError(`HTTP ${err.status}: 인증키를 확인하세요`, true);
+        }
+        lastErr = err;
+        if (attempt < retries)
+          await new Promise((r) => setTimeout(r, (this.options.retryDelayMs ?? 2000) * 2 ** attempt));
       }
-    });
-    this.scheduleSave(map);
-  }
-
-  /**
-   * 좌표가 없는 매장은 사용자의 시/군/구와 같은 주소만 골라 주소→좌표 변환을 한다.
-   * 같은 시/도 전체는 백그라운드에서 천천히 채운다.
-   */
-  private async ensureLocated(all: KcaStore[], center: LatLng): Promise<number> {
-    const unlocated = all.filter((s) => !s.located);
-    if (unlocated.length === 0 || !this.geocoder) return 0;
-    const region = await this.geocoder.reverse(center).catch(() => undefined);
-    if (!region?.region2) return unlocated.length;
-    const aliases = regionAliases(region.region1);
-    const r2 = region.region2.split(' ')[0];
-    const addrOf = (s: KcaStore) => `${s.roadAddress ?? ''} ${s.address ?? ''}`;
-    const inRegion1 = (s: KcaStore) => aliases.length === 0 || aliases.some((a) => addrOf(s).includes(a));
-    const inRegion = (s: KcaStore) => addrOf(s).includes(r2) && inRegion1(s);
-    const local = unlocated.filter(inRegion);
-    await this.geocodeStores(local, this.geocoder.bulk ? 8000 : 4000);
-
-    const regionKey = region.region1 ?? '';
-    if (this.geocoder.bulk && regionKey && aliases.length > 0 && !this.geocodingRegions.has(regionKey)) {
-      this.geocodingRegions.add(regionKey);
-      const wide = unlocated.filter(inRegion1);
-      void this.geocodeStores(wide, 10 * 60_000);
     }
-    return local.filter((s) => !s.located).length;
+    throw new KcaApiError(lastErr instanceof Error ? lastErr.message : String(lastErr), false);
   }
 
-  /* -------------------------------- 조회 -------------------------------- */
-
-  async nearbyStores(center: LatLng, radius: number): Promise<KcaNearby> {
-    const all = await this.allStores();
-    const pendingGeocode = await this.ensureLocated(all, center);
-    const stores = all
-      .filter((s) => s.located)
-      .map((s) => ({ ...s, distance: distanceMeters(center, s) }))
-      .filter((s) => s.distance <= radius)
-      .sort((a, b) => a.distance - b.distance)
-      .slice(0, this.config.kcaMaxStores);
-    return { stores, pendingGeocode };
+  async stores(): Promise<KcaStoreRaw[]> {
+    return (await this.call('getStoreInfoSvc.do', {})) as unknown as KcaStoreRaw[];
   }
 
-  private async pricesFor(stores: KcaStore[]): Promise<{ day?: string; byStore: Map<string, KcaPrice[]> }> {
-    const byStore = new Map<string, KcaPrice[]>();
-    if (stores.length === 0) return { byStore };
-    const day = await this.latestInspectDay(stores.map((s) => s.entpId));
-    if (!day) return { byStore };
-    const previous = addDays(day, -7);
-    await mapLimit(stores, 4, async (store) => {
-      let prices = await this.storePrices(store.entpId, day).catch(() => []);
-      if (prices.length === 0) prices = await this.storePrices(store.entpId, previous).catch(() => []);
-      byStore.set(store.entpId, prices);
+  async products(): Promise<KcaProductRaw[]> {
+    return (await this.call('getProductInfoSvc.do', {})) as unknown as KcaProductRaw[];
+  }
+
+  /** 한 상품의 전국 판매점 가격 (조사일 YYYY-MM-DD) */
+  async pricesByProduct(goodId: string, inspectDay: string): Promise<KcaPriceRaw[]> {
+    return (await this.call(
+      'getProductPriceInfoSvc',
+      { goodInspectDay: inspectDay.replaceAll('-', ''), goodId },
+      'serviceKey',
+    )) as unknown as KcaPriceRaw[];
+  }
+}
+
+/* ------------------------------ 스냅샷 읽기 ------------------------------ */
+
+interface Loaded {
+  manifest: KcaManifest;
+  products: KcaProductsFile;
+  mtime: number;
+}
+
+/**
+ * 하루 한 번 만든 참가격 스냅샷(data/kca)을 읽는다. 파일이 바뀌면 다시 읽는다.
+ */
+export class KcaSource {
+  private loaded?: Promise<Loaded | null>;
+  private checkedAt = 0;
+  private tiles = new Map<string, Promise<KcaTileFile | null>>();
+
+  constructor(private readonly dir: string) {}
+
+  /** 스냅샷이 있으면 manifest, 없으면 null */
+  async manifest(): Promise<KcaManifest | null> {
+    return (await this.load())?.manifest ?? null;
+  }
+
+  private async load(): Promise<Loaded | null> {
+    const now = Date.now();
+    if (this.loaded && now - this.checkedAt < 30_000) return this.loaded;
+    this.checkedAt = now;
+    const current = await this.loaded;
+    const manifestPath = path.join(this.dir, 'manifest.json');
+    const { stat } = await import('node:fs/promises');
+    const mtime = await stat(manifestPath).then(
+      (s) => s.mtimeMs,
+      () => 0,
+    );
+    if (current && current.mtime === mtime) return this.loaded!;
+    this.tiles.clear();
+    this.loaded = (async () => {
+      if (!mtime) return null;
+      const manifest = await readJson<KcaManifest>(manifestPath);
+      if (!manifest || manifest.version !== KCA_SNAPSHOT_VERSION) return null;
+      const products = (await readJson<KcaProductsFile>(path.join(this.dir, 'products.json'))) ?? {};
+      return { manifest, products, mtime };
+    })().catch((err) => {
+      console.warn('[kca] 스냅샷을 읽지 못했습니다:', (err as Error).message);
+      return null;
     });
-    return { day, byStore };
+    return this.loaded;
+  }
+
+  private tile(key: string): Promise<KcaTileFile | null> {
+    let p = this.tiles.get(key);
+    if (!p) {
+      p = readJson<KcaTileFile>(path.join(this.dir, kcaTileFile(key))).then((v) => v ?? null);
+      this.tiles.set(key, p);
+    }
+    return p;
+  }
+
+  private async nearby(center: LatLng, radius: number) {
+    const loaded = await this.load();
+    if (!loaded) return null;
+    const keys = kcaTilesForCircle(loaded.manifest, center, radius);
+    const tiles = (await Promise.all(keys.map((k) => this.tile(k)))).filter((t): t is KcaTileFile => Boolean(t));
+    return { loaded, nearby: kcaNearbyStores(tiles, center, radius) };
   }
 
   async deals(
     center: LatLng,
     radius: number,
-  ): Promise<{ deals: Deal[]; stores: KcaNearby['stores']; inspectDay?: string; pendingGeocode: number }> {
-    const [{ stores, pendingGeocode }, products] = await Promise.all([
-      this.nearbyStores(center, radius),
-      this.allProducts(),
-    ]);
-    const { day, byStore } = await this.pricesFor(stores);
-
-    // 같은 상품의 주변 가격 통계
-    const stats = new Map<string, { sum: number; min: number; max: number; n: number }>();
-    for (const prices of byStore.values()) {
-      for (const p of prices) {
-        const s = stats.get(p.goodId) ?? { sum: 0, min: Infinity, max: 0, n: 0 };
-        s.sum += p.price;
-        s.min = Math.min(s.min, p.price);
-        s.max = Math.max(s.max, p.price);
-        s.n += 1;
-        stats.set(p.goodId, s);
-      }
-    }
-
-    // 할인 상품은 지난주 가격을 정가로 본다 (지난주에 할인이 아니었을 때만)
-    const prevPrice = new Map<string, number>();
-    if (day) {
-      const prevDay = addDays(day, -7);
-      const withDiscount = stores.filter((s) => byStore.get(s.entpId)?.some((p) => p.discount && p.inspectDay === day));
-      await mapLimit(withDiscount, 4, async (store) => {
-        const prev = await this.storePrices(store.entpId, prevDay).catch(() => []);
-        for (const p of prev) if (!p.discount && !p.onePlusOne) prevPrice.set(`${store.entpId}:${p.goodId}`, p.price);
-      });
-    }
-
-    const deals: Deal[] = [];
-    const storeById = new Map(stores.map((s) => [s.entpId, s]));
-    for (const [entpId, prices] of byStore) {
-      const store = storeById.get(entpId)!;
-      for (const p of prices) {
-        if (!p.discount && !p.onePlusOne) continue;
-        const product = products.get(p.goodId);
-        const name = product?.name ?? `상품 ${p.goodId}`;
-        const st = stats.get(p.goodId);
-        const original = prevPrice.get(`${entpId}:${p.goodId}`);
-        const createdAt = parseInputDate(p.inputAt) ?? `${p.inspectDay}T00:00:00+09:00`;
-        deals.push({
-          id: `kca:${entpId}:${p.goodId}`,
-          storeId: store.id,
-          title: p.onePlusOne ? `${name} 1+1` : `${name} 할인`,
-          productName: name,
-          description: `한국소비자원 참가격 ${p.inspectDay} 조사 기준 가격입니다. 매장 사정에 따라 달라질 수 있어요.`,
-          type: p.onePlusOne ? 'one_plus_one' : 'discount',
-          category: store.category,
-          salePrice: p.price,
-          originalPrice: original && original > p.price ? original : undefined,
-          unit: product?.unit,
-          startDate: p.dcStart,
-          endDate: p.dcEnd,
-          tags: ['참가격', store.typeLabel].filter(Boolean),
-          source: 'kca',
-          sourceUrl: 'https://www.price.go.kr',
-          priceCompare:
-            st && st.n >= 2
-              ? { avg: Math.round(st.sum / st.n), min: st.min, max: st.max, storeCount: st.n }
-              : undefined,
-          createdAt,
-          updatedAt: createdAt,
-          likes: 0,
-          confirms: 0,
-          expiredReports: 0,
-        });
-      }
-    }
-    return { deals, stores, inspectDay: day, pendingGeocode };
+  ): Promise<{ deals: Deal[]; stores: StoreWithDistance[]; manifest: KcaManifest } | null> {
+    const r = await this.nearby(center, radius);
+    if (!r) return null;
+    return {
+      deals: kcaDeals(r.nearby, r.loaded.products, r.loaded.manifest.inspectDay),
+      stores: r.nearby.map((n) => n.store),
+      manifest: r.loaded.manifest,
+    };
   }
 
-  /** 검색어와 맞는 상품의 주변 매장 가격 비교 */
+  async stores(center: LatLng, radius: number): Promise<Store[]> {
+    return (await this.nearby(center, radius))?.nearby.map((n) => n.store) ?? [];
+  }
+
   async compare(
     center: LatLng,
     radius: number,
     q: string,
-  ): Promise<{ groups: KcaCompareGroup[]; inspectDay?: string }> {
-    const needle = normalizeText(q);
-    const [{ stores }, products] = await Promise.all([this.nearbyStores(center, radius), this.allProducts()]);
-    const matched = [...products.values()].filter((p) => normalizeText(p.name).includes(needle));
-    if (matched.length === 0 || stores.length === 0) return { groups: [] };
-    const { day, byStore } = await this.pricesFor(stores);
-    const ids = new Set(matched.map((p) => p.goodId));
-    const groups = new Map<string, { store: KcaStore & { distance: number }; price: KcaPrice }[]>();
-    for (const store of stores) {
-      for (const price of byStore.get(store.entpId) ?? []) {
-        if (!ids.has(price.goodId)) continue;
-        const list = groups.get(price.goodId) ?? [];
-        list.push({ store, price });
-        groups.set(price.goodId, list);
-      }
-    }
-    const result = [...groups.entries()].map(([goodId, entries]) => {
-      const product = products.get(goodId)!;
-      const prices = entries.map((e) => e.price.price);
-      entries.sort((a, b) => a.price.price - b.price.price || a.store.distance - b.store.distance);
-      return {
-        productId: goodId,
-        productName: product.name,
-        unit: product.unit,
-        entries,
-        min: Math.min(...prices),
-        max: Math.max(...prices),
-        avg: Math.round(prices.reduce((a, b) => a + b, 0) / prices.length),
-      };
-    });
-    result.sort((a, b) => b.entries.length - a.entries.length || a.productName.localeCompare(b.productName, 'ko'));
-    return { groups: result.slice(0, 30), inspectDay: day };
+  ): Promise<{ groups: PriceCompareGroup[]; manifest: KcaManifest } | null> {
+    const r = await this.nearby(center, radius);
+    if (!r) return null;
+    return {
+      groups: kcaCompare(r.nearby, r.loaded.products, q, r.loaded.manifest.inspectDay),
+      manifest: r.loaded.manifest,
+    };
   }
-}
-
-const PROVINCE_ABBR: Record<string, string> = {
-  경상북도: '경북',
-  경상남도: '경남',
-  전라북도: '전북',
-  전북특별자치도: '전북',
-  전라남도: '전남',
-  충청북도: '충북',
-  충청남도: '충남',
-};
-
-/** "서울특별시" → ["서울특별시", "서울"], "경상북도" → ["경상북도", "경북"] */
-export function regionAliases(region1: string | undefined): string[] {
-  if (!region1) return [];
-  const short = region1
-    .replace(/특별자치시|특별자치도|특별시|광역시/, '')
-    .replace(/도$/, '')
-    .trim();
-  return [...new Set([region1, short, PROVINCE_ABBR[region1]].filter((v): v is string => Boolean(v && v.length >= 2)))];
-}
-
-/** "20240105123000" / "2024-01-05 12:30:00" → ISO */
-function parseInputDate(value: string | undefined): string | undefined {
-  if (!value) return undefined;
-  const d = value.replace(/\D/g, '');
-  if (d.length < 8) return undefined;
-  const date = normalizeDate(d.slice(0, 8));
-  if (!date) return undefined;
-  const hh = d.slice(8, 10) || '00';
-  const mm = d.slice(10, 12) || '00';
-  return `${date}T${hh}:${mm}:00+09:00`;
 }

@@ -1,8 +1,7 @@
-import type { NewsItem } from '@sale-radar/shared';
+import { safeHttpUrl, type NewsItem } from '@sale-radar/shared';
 import type { AppConfigEnv } from '../config.ts';
 import { TtlCache } from '../lib/cache.ts';
 import { fetchJson } from '../lib/http.ts';
-import { safeHttpUrl } from '../lib/url.ts';
 
 interface NaverBlogResponse {
   items: { title: string; link: string; description: string; bloggername: string; postdate: string }[];

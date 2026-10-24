@@ -1,5 +1,6 @@
-import { distanceMeters, type Store } from '@sale-radar/shared';
-import { detectBrand } from '../lib/category.ts';
+import { detectBrand } from './category.ts';
+import { distanceMeters } from './deal-utils.ts';
+import type { Store } from './types.ts';
 
 const SAME_PLACE_METERS = 60;
 const GRID = 0.0006; // 약 60m

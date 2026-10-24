@@ -165,6 +165,10 @@ export interface SourceStatus {
   durationMs?: number;
   /** 아직 불러오는 중 (잠시 후 다시 검색하면 채워짐) */
   pending?: boolean;
+  /** 하루 한 번 받아 두는 자료의 갱신 시각 (ISO) */
+  updatedAt?: string;
+  /** 자료 기준일 (참가격 조사일 등, YYYY-MM-DD) */
+  baseDate?: string;
   /** 활성화에 필요한 환경변수 */
   requires?: string;
 }
@@ -281,6 +285,8 @@ export interface VoteResult {
 }
 
 export interface AppConfig {
+  /** server: API 서버 사용 / static: GitHub Pages 처럼 미리 만든 파일만 사용 */
+  dataMode?: 'server' | 'static';
   radiusOptions: number[];
   defaultRadius: number;
   sampleAvailable: boolean;

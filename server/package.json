@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "tsx watch --clear-screen=false src/index.ts",
     "start": "tsx src/index.ts",
-    "import": "tsx scripts/import.ts"
+    "import": "tsx scripts/import.ts",
+    "data:update": "tsx scripts/update-data.ts"
   },
   "dependencies": {
     "@sale-radar/shared": "0.1.0",

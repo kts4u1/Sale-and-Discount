@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { DEFAULT_OVERPASS_ENDPOINTS } from '@sale-radar/shared';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const SERVER_ROOT = path.resolve(here, '..');
@@ -37,11 +38,17 @@ export interface AppConfigEnv {
   host: string;
   dataDir: string;
   clientDist: string;
-  /** 공공데이터포털(data.go.kr) 인증키 - 한국소비자원 참가격 */
+  /** 공공데이터포털(data.go.kr) 인증키 - 한국소비자원 참가격 (하루 한 번 업데이트 작업만 사용) */
   dataGoKrKey?: string;
   kcaBaseUrl: string;
-  /** 참가격 API 에서 한 번에 조회할 최대 매장 수 */
-  kcaMaxStores: number;
+  /** 참가격 스냅샷 폴더 (업데이트 작업이 쓰고 검색이 읽는다) */
+  kcaDataDir: string;
+  /** 참가격 원자료 보관 폴더 */
+  kcaRawDir: string;
+  /** 서버가 하루 한 번 직접 업데이트할지 (인증키가 있을 때) */
+  kcaAutoUpdate: boolean;
+  /** 매일 업데이트 시각 (한국 시간 HH:MM) */
+  kcaUpdateTime: string;
   kakaoKey?: string;
   naverClientId?: string;
   naverClientSecret?: string;
@@ -65,17 +72,17 @@ export function loadConfig(overrides: Partial<AppConfigEnv> = {}): AppConfigEnv 
     host: env('HOST') ?? '0.0.0.0',
     dataDir: path.resolve(env('DATA_DIR') ?? path.join(SERVER_ROOT, 'data')),
     clientDist: path.resolve(env('CLIENT_DIST') ?? path.join(PROJECT_ROOT, 'client', 'dist')),
-    dataGoKrKey: env('DATA_GO_KR_SERVICE_KEY'),
+    // 학원 앱과 같은 이름(DATA_GO_KR_KEY)을 쓰고, 예전 이름도 받는다
+    dataGoKrKey: env('DATA_GO_KR_KEY') ?? env('DATA_GO_KR_SERVICE_KEY'),
     kcaBaseUrl: env('KCA_API_BASE_URL') ?? 'https://apis.data.go.kr/B551919/ProductPriceInfoService',
-    kcaMaxStores: Number(env('KCA_MAX_STORES') ?? 25),
+    kcaDataDir: path.resolve(env('KCA_DATA_DIR') ?? path.join(PROJECT_ROOT, 'client', 'public', 'data', 'kca')),
+    kcaRawDir: path.resolve(env('KCA_RAW_DIR') ?? path.join(PROJECT_ROOT, '.kca-raw')),
+    kcaAutoUpdate: env('KCA_AUTO_UPDATE') !== 'false',
+    kcaUpdateTime: /^\d{2}:\d{2}$/.test(env('KCA_UPDATE_TIME') ?? '') ? env('KCA_UPDATE_TIME')! : '06:10',
     kakaoKey: env('KAKAO_REST_API_KEY'),
     naverClientId: env('NAVER_CLIENT_ID'),
     naverClientSecret: env('NAVER_CLIENT_SECRET'),
-    overpassEndpoints: list(env('OVERPASS_ENDPOINTS'), [
-      'https://overpass-api.de/api/interpreter',
-      'https://overpass.private.coffee/api/interpreter',
-      'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
-    ]),
+    overpassEndpoints: list(env('OVERPASS_ENDPOINTS'), DEFAULT_OVERPASS_ENDPOINTS),
     enableOsm: env('ENABLE_OSM') !== 'false',
     nominatimUrl: env('NOMINATIM_URL') ?? 'https://nominatim.openstreetmap.org',
     userAgent: env('USER_AGENT') ?? 'SaleRadar/0.1 (+https://github.com/kts4u1/Sale-and-Discount)',
@@ -89,12 +96,17 @@ export function loadConfig(overrides: Partial<AppConfigEnv> = {}): AppConfigEnv 
   return { ...base, ...overrides };
 }
 
-/** 실제 행사 데이터를 주는 외부 소스가 하나라도 켜져 있는지 */
-export function hasRealDealSource(config: AppConfigEnv): boolean {
-  return Boolean(config.dataGoKrKey);
+/** 참가격 스냅샷(하루 한 번 받아 둔 자료)이 있는지 */
+export function hasKcaSnapshot(config: AppConfigEnv): boolean {
+  return existsSync(path.join(config.kcaDataDir, 'manifest.json'));
 }
 
-/** auto: 참가격 키가 없으면 샘플을 기본으로 보여준다 */
+/** 실제 행사 데이터가 있는지 */
+export function hasRealDealSource(config: AppConfigEnv): boolean {
+  return hasKcaSnapshot(config);
+}
+
+/** auto: 참가격 자료가 없으면 샘플을 기본으로 보여준다 */
 export function sampleDefault(config: AppConfigEnv): boolean {
   if (config.sampleMode === 'on') return true;
   if (config.sampleMode === 'off') return false;

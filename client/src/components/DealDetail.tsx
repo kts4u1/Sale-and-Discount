@@ -20,7 +20,8 @@ interface Props {
   onClose: () => void;
   onToggleSave: (d: DealView) => void;
   onOpenDeal: (d: DealView) => void;
-  onVoted: (dealId: string, counts: { likes: number; confirms: number; expiredReports: number }) => void;
+  /** 내 반응 하나를 화면 숫자에 더한다 */
+  onVoted: (dealId: string, action: VoteAction) => void;
   onToast: (msg: string) => void;
 }
 
@@ -94,7 +95,7 @@ export function DealDetail({
       } catch {
         /* 저장 실패는 무시 */
       }
-      onVoted(deal.id, r);
+      if (!r.duplicate) onVoted(deal.id, action);
       onToast(action === 'expired' ? '신고해 주셔서 고마워요. 여러 명이 신고하면 목록에서 숨겨집니다.' : '반영됐어요!');
     } catch (err) {
       onToast((err as Error).message);

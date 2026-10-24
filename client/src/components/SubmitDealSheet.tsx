@@ -19,6 +19,8 @@ interface Props {
   open: boolean;
   center: LatLng;
   centerLabel: string;
+  /** 정적 배포: 서버가 없어 이 기기에만 저장 */
+  localOnly?: boolean;
   presetStore?: StoreWithDistance;
   onClose: () => void;
   onCreated: () => void;
@@ -167,9 +169,16 @@ export function SubmitDealSheet(p: Props) {
       }
     >
       <form id="submit-deal" className="form" onSubmit={submit}>
-        <p className="muted small">
-          동네 가게의 할인·마감세일·이벤트를 알려 주세요. 등록하면 주변 사람들에게 바로 보입니다.
-        </p>
+        {p.localOnly ? (
+          <p className="notice info">
+            지금은 서버 없이 동작하는 버전이라 제보가 <strong>이 기기에만 저장</strong>돼요. 다른 사람과 함께 보려면
+            서버(<code>npm start</code>)로 실행하세요.
+          </p>
+        ) : (
+          <p className="muted small">
+            동네 가게의 할인·마감세일·이벤트를 알려 주세요. 등록하면 주변 사람들에게 바로 보입니다.
+          </p>
+        )}
 
         <fieldset>
           <legend>1. 어느 매장인가요?</legend>

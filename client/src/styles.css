@@ -672,6 +672,15 @@ input[type='range']::-moz-range-thumb {
   opacity: 0.95;
 }
 
+.data-fresh {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.data-fresh.stale {
+  color: var(--warn-text);
+}
+
 .empty {
   text-align: center;
   padding: 32px 12px;

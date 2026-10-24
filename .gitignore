@@ -7,3 +7,7 @@ coverage/
 server/data/cache/
 server/data/community.json
 server/data/*.tmp
+
+# 매일 자동으로 만드는 데이터 (GitHub Actions / npm run data:update)
+.kca-raw/
+client/public/data/

@@ -5,16 +5,16 @@
 
 여러 곳의 데이터를 모아서 보여줍니다.
 
-| 출처 | 내용 | 필요한 것 |
-| --- | --- | --- |
-| **한국소비자원 참가격** | 전국 대형마트·SSM·백화점·편의점·전통시장의 생필품 가격, **할인 여부·할인 기간, 1+1 여부** (매주 금요일 조사) | 공공데이터포털 무료 인증키 |
-| **카카오 로컬** | 주변 음식점·카페·편의점·마트·약국·올리브영·다이소·정육점 등 매장 정보, 주소 검색 | 카카오 REST API 키 (무료) |
-| **OpenStreetMap** | 주변 매장(이름·업종·영업시간·전화번호) | 없음 |
-| **사용자 제보** | 동네 가게의 마감할인·타임세일·오픈 이벤트 등을 사용자가 직접 등록, 👍/✅/🚫 투표로 검증 | 없음 |
-| **브랜드 행사** | 편의점·프랜차이즈 공통 행사(1+1, 2+1 등)를 반경 안의 해당 브랜드 매장에 연결 | 운영자가 CSV 등록 |
-| **착한가격업소** | 지자체 지정 착한가격업소의 대표 메뉴·가격 | 공공데이터포털 CSV 등록 |
-| **네이버 블로그** | 매장 상세 화면에서 최근 할인·이벤트 후기 | 네이버 검색 API 키 (무료) |
-| **샘플 데이터** | 키가 없어도 모든 기능을 체험할 수 있는 가상의 매장·행사 (`[샘플]` 표시) | 없음 |
+| 출처                    | 내용                                                                                                                                   | 필요한 것                  |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | -------------------------- |
+| **한국소비자원 참가격** | 전국 대형마트·SSM·백화점·편의점·전통시장의 생필품 가격, **할인 여부·할인 기간, 1+1 여부** (매주 금요일 조사, **하루 한 번 자동 갱신**) | 공공데이터포털 무료 인증키 |
+| **카카오 로컬**         | 주변 음식점·카페·편의점·마트·약국·올리브영·다이소·정육점 등 매장 정보, 주소 검색                                                       | 카카오 REST API 키 (무료)  |
+| **OpenStreetMap**       | 주변 매장(이름·업종·영업시간·전화번호)                                                                                                 | 없음                       |
+| **사용자 제보**         | 동네 가게의 마감할인·타임세일·오픈 이벤트 등을 사용자가 직접 등록, 👍/✅/🚫 투표로 검증                                                | 없음                       |
+| **브랜드 행사**         | 편의점·프랜차이즈 공통 행사(1+1, 2+1 등)를 반경 안의 해당 브랜드 매장에 연결                                                           | 운영자가 CSV 등록          |
+| **착한가격업소**        | 지자체 지정 착한가격업소의 대표 메뉴·가격                                                                                              | 공공데이터포털 CSV 등록    |
+| **네이버 블로그**       | 매장 상세 화면에서 최근 할인·이벤트 후기                                                                                               | 네이버 검색 API 키 (무료)  |
+| **샘플 데이터**         | 키가 없어도 모든 기능을 체험할 수 있는 가상의 매장·행사 (`[샘플]` 표시)                                                                | 없음                       |
 
 ## 주요 기능
 
@@ -34,7 +34,68 @@
 - **찜**: 관심 행사 저장 (종료되면 표시)
 - **다크 모드**, 모바일/PC 반응형, 홈 화면 설치(PWA manifest)
 
-## 빠르게 실행하기
+## 참가격 인증키 넣기 (하루 한 번 자동 업데이트)
+
+참가격 자료는 **검색할 때마다 API를 부르지 않습니다.** 하루 한 번 전국 자료를 받아 파일로 만들어 두고, 앱은 그 파일만 읽습니다.
+(학원 검색 앱과 같은 방식입니다.)
+
+```
+매일 06:17 (한국 시간)
+GitHub Actions ─ 인증키(Secrets) ─▶ 참가격 API ─▶ data/kca/*.json 생성 ─▶ GitHub Pages 배포
+                                                                         │
+휴대폰·PC 브라우저 ◀──────────────── 미리 만든 파일만 읽음 (키는 브라우저에 가지 않음) ◀┘
+```
+
+- 참가격은 **매주 금요일** 조사 자료라서, 이미 받은 조사일이면 다시 받지 않습니다. 매일 돌려도 API 호출은 2~7번뿐이고,
+  새 조사일이 올라온 날만 상품 수(수백 번)만큼 호출합니다.
+- 받다가 실패하면 보관해 둔 원자료로 다시 만들고, 그것도 안 되면 배포하지 않아 **어제 자료가 그대로 남습니다.**
+- 앱 화면에는 "📦 참가격 2026-10-23 조사 자료 · 3시간 전 갱신"처럼 갱신 시각이 나오고, 3일 넘게 갱신이 멈추면 경고가 보입니다.
+
+### 방법 A. GitHub Pages로 배포 (권장, 서버 필요 없음)
+
+1. 저장소 **Settings → Secrets and variables → Actions → New repository secret**
+   - Name: `DATA_GO_KR_KEY`
+   - Secret: 공공데이터포털 인증키 (마이페이지 → 데이터 활용 → Open API → 활용신청 현황에서 복사, Encoding/Decoding 아무거나)
+   - 💡 공공데이터포털 인증키는 **계정마다 하나**라서 학원 앱(`kts4u1/Academy`)에 넣은 `DATA_GO_KR_KEY`와 같은 값입니다.
+     다만 이 API([한국소비자원\_생필품 가격 정보](https://www.data.go.kr/data/15158701/openapi.do))에도 **활용신청**이 되어 있어야 합니다.
+   - ⚠️ 키를 코드, 커밋, 채팅에 붙여 넣지 마세요. Secrets에 넣은 값은 저장소 관리자도 다시 볼 수 없고 로그에도 `***`로 가려집니다.
+2. (선택) 같은 곳에 `KAKAO_REST_API_KEY`도 넣으면 좌표가 없는 판매점의 주소 → 좌표 변환이 빨라집니다.
+3. **Settings → Pages → Build and deployment → Source**를 `GitHub Actions`로 바꿉니다.
+4. **Actions → 참가격 데이터 매일 업데이트 → Run workflow**로 처음 한 번 실행합니다.
+   끝나면 `https://kts4u1.github.io/Sale-and-Discount/` 에서 열립니다. 이후에는 매일 자동으로 갱신됩니다.
+
+정적 배포에서는 서버가 없으므로 주변 매장은 브라우저가 OpenStreetMap에 직접 묻고, **행사 제보·투표는 그 기기에만 저장**됩니다.
+여러 사람이 제보를 함께 보려면 방법 B(서버)를 쓰세요.
+
+### 방법 B. 서버로 실행 (제보 공유·카카오·네이버까지 모두 사용)
+
+프로젝트 폴더에 `.env` 파일을 만들고(`cp .env.example .env`) 키를 넣습니다.
+
+```
+DATA_GO_KR_KEY=공공데이터포털_인증키
+```
+
+`npm start`로 서버를 켜면, 받아 둔 자료가 없거나 20시간 넘게 지났을 때 바로 한 번 받고, 이후 **매일 06:10(한국 시간)**에 자동으로 갱신합니다.
+(`KCA_UPDATE_TIME=05:30`처럼 시각을 바꾸거나 `KCA_AUTO_UPDATE=false`로 끌 수 있습니다.)
+
+직접 한 번 받으려면:
+
+```bash
+npm run data:update               # 참가격 전국 자료 → client/public/data/kca/
+npm run data:update -- --force    # 이미 받은 조사일이어도 다시 받기
+npm run data:update -- --offline  # API 없이 보관한 원자료(.kca-raw)로 다시 만들기
+```
+
+### 키가 동작하지 않을 때
+
+| 증상                                         | 원인·해결                                                                      |
+| -------------------------------------------- | ------------------------------------------------------------------------------ |
+| `SERVICE_KEY_IS_NOT_REGISTERED_ERROR`        | 승인 직후에는 1~2시간(길면 하루) 걸립니다. 잠시 후 다시 실행하세요.            |
+| `SERVICE ACCESS DENIED`                      | 이 API에 활용신청이 안 되어 있습니다. 데이터 페이지에서 활용신청하세요.        |
+| `LIMITED NUMBER OF SERVICE REQUESTS EXCEEDS` | 하루 호출 한도 초과. 다음 날 자동으로 다시 받고, 그동안은 보관본으로 만듭니다. |
+| Actions에 "인증키가 없어 건너뜁니다"         | Secrets 이름이 `DATA_GO_KR_KEY`인지 확인하세요 (대소문자 구분).                |
+
+## 빠르게 실행하기 (개발)
 
 Node.js **22.12 이상**이 필요합니다.
 
@@ -43,7 +104,7 @@ git clone https://github.com/kts4u1/Sale-and-Discount.git
 cd Sale-and-Discount
 npm install
 
-# (선택) API 키 설정 - 없어도 실행됩니다
+# (선택) API 키 설정 - 없어도 실행됩니다 (샘플 데이터 + OpenStreetMap)
 cp .env.example .env
 
 # 개발 모드: 서버(8787) + 화면(5173) 동시 실행
@@ -54,8 +115,9 @@ npm run dev
 배포(운영) 모드:
 
 ```bash
-npm run build   # 화면을 client/dist 로 빌드
-npm start       # 서버 하나로 화면 + API 제공 → http://localhost:8787
+npm run build          # 서버용 화면 빌드 → client/dist
+npm start              # 서버 하나로 화면 + API 제공 → http://localhost:8787
+npm run build:static   # 서버 없는 정적 사이트 빌드 (GitHub Pages 용) → client/dist
 ```
 
 Docker:
@@ -66,32 +128,17 @@ docker run -p 8787:8787 --env-file .env -v sale-radar-data:/app/server/data sale
 ```
 
 > 📍 **휴대폰에서 GPS 위치를 쓰려면 https 주소가 필요합니다.** (브라우저 정책, `localhost`는 예외)
-> 같은 와이파이의 휴대폰으로 테스트할 때는 주소 검색이나 "지도에서 직접 고르기"를 쓰거나,
-> 배포 시 https(예: Nginx + Let's Encrypt, Cloudflare Tunnel 등)를 적용하세요.
+> GitHub Pages는 https라서 바로 됩니다.
 
-## API 키 발급 방법
+## 다른 API 키 (선택)
 
-### 1. 한국소비자원 참가격 (가장 중요 — 실제 할인·1+1 데이터)
-
-1. [공공데이터포털](https://www.data.go.kr) 회원가입
-2. [한국소비자원_생필품 가격 정보](https://www.data.go.kr/data/15158701/openapi.do) 페이지에서 **활용신청** (보통 자동 승인)
-3. 마이페이지 → 개발계정 → 인증키(Encoding 또는 Decoding) 복사
-4. `.env`의 `DATA_GO_KR_SERVICE_KEY=` 에 붙여넣고 서버 재시작
-
-- 조사일은 매주 금요일이며, 앱은 데이터가 올라온 가장 최근 조사일을 자동으로 찾습니다.
-- 할인 상품은 지난주 같은 매장 가격을 정가로 보고 할인율을 계산하고, 주변 매장 평균가와 비교해 보여줍니다.
-- 매장 좌표가 경위도가 아니면 주소로 좌표를 찾아 `server/data/cache/kca-geocode.json`에 저장합니다
-  (카카오 키가 있으면 훨씬 빠릅니다).
-- 개발계정은 하루 호출 수 제한이 있습니다. `KCA_MAX_STORES`(기본 25)로 한 번에 조회할 매장 수를 조절하세요.
-  조회 결과는 12시간 캐시됩니다.
-
-### 2. 카카오 로컬 (매장 정보·주소 검색 정확도 향상)
+### 카카오 로컬 (서버 실행 시 매장 정보·주소 검색 정확도 향상)
 
 1. [카카오 개발자 센터](https://developers.kakao.com) → 내 애플리케이션 → 애플리케이션 추가
 2. 앱 설정 → 앱 키 → **REST API 키** 복사, 제품 설정에서 **카카오맵** 사용 설정 ON
-3. `.env`의 `KAKAO_REST_API_KEY=` 에 입력
+3. `.env`의 `KAKAO_REST_API_KEY=` 에 입력 (GitHub Actions에서는 Secrets에 같은 이름으로 넣으면 주소 → 좌표 변환에 씁니다)
 
-### 3. 네이버 검색 (선택 — 매장 블로그 소식)
+### 네이버 검색 (서버 실행 시 매장 블로그 소식)
 
 1. [네이버 개발자 센터](https://developers.naver.com/apps) → 애플리케이션 등록 → 사용 API: **검색**
 2. Client ID / Secret 을 `.env`의 `NAVER_CLIENT_ID`, `NAVER_CLIENT_SECRET`에 입력
@@ -132,32 +179,49 @@ GS25,탄산음료,2+1,2200,,500ml,2026-11-01,2026-11-30,convenience,
 ## 구조
 
 ```
-├── shared/   공통 타입·상수·계산 (거리, 한국시간, 행사 진행 상태, 할인율)
+├── .github/workflows/update-data.yml   매일 참가격 자료를 받아 GitHub Pages 로 배포
+├── shared/   서버와 브라우저가 함께 쓰는 계산
+│             (거리·한국시간·행사 진행 상태·할인율, 매장 합치기, 검색 필터·정렬, 샘플, OpenStreetMap, 참가격 스냅샷 형식)
 ├── server/   Express API 서버 (TypeScript, tsx 로 실행)
-│   ├── src/sources/   데이터 출처별 연동 (kca, kakao, osm, nominatim, naver, brand, goodprice, sample)
-│   ├── src/services/  검색(합치기·필터·정렬·통계), 매장 중복 합치기
-│   ├── src/store/     사용자 제보·투표 저장 (JSON 파일)
-│   ├── scripts/       CSV 불러오기 도구
-│   ├── data/          제보·캐시·불러온 데이터 저장 위치
-│   └── test/          테스트
+│   ├── src/kca-update.ts  참가격 전국 자료 → 스냅샷 파일 (하루 한 번)
+│   ├── src/kca-runner.ts  서버의 매일 자동 갱신 일정
+│   ├── src/sources/       데이터 출처별 연동 (kca, kakao, osm, nominatim, naver, brand, goodprice)
+│   ├── src/services/      검색
+│   ├── src/store/         사용자 제보·투표 저장 (JSON 파일)
+│   ├── scripts/           update-data(매일 업데이트), import(CSV 불러오기)
+│   ├── data/              제보·캐시·불러온 데이터 저장 위치
+│   └── test/              테스트
 └── client/   React + Vite + Leaflet 화면
+    └── src/data/          server-api(서버 사용) / static-api(서버 없이 미리 만든 파일 사용)
 ```
+
+참가격 스냅샷 (`client/public/data/kca/`, 저장소에는 올리지 않음 — Actions 가 매번 만든다)
+
+| 파일            | 내용                                                                        |
+| --------------- | --------------------------------------------------------------------------- |
+| `manifest.json` | 갱신 시각, 조사일, 매장·가격·할인·1+1 건수, 격자 목록, 파일별 내용 해시     |
+| `products.json` | 상품 id → 상품명·용량                                                       |
+| `t/{격자}.json` | 약 2km 격자마다 판매점 정보와 상품별 가격·할인 여부·할인 기간·지난주 정상가 |
 
 ### API
 
-| 메서드 | 경로 | 설명 |
-| --- | --- | --- |
-| GET | `/api/deals?lat&lng&radius&q&categories&types&sort&active&minDiscount&sample` | 주변 행사 검색 (radius 100~1000) |
-| POST | `/api/deals` | 행사 제보 |
-| POST | `/api/deals/:id/vote` | `{"action":"like"\|"confirm"\|"expired"}` |
-| GET | `/api/stores?lat&lng&radius&q` | 주변 매장 목록 |
-| GET | `/api/prices?lat&lng&radius&q` | 참가격 가격 비교 |
-| GET | `/api/geocode?q` / `/api/reverse?lat&lng` | 주소 ↔ 좌표 |
-| GET | `/api/news?q` | 네이버 블로그 소식 |
-| GET | `/api/config` | 반경 옵션, 켜진 데이터 출처 |
+| 메서드 | 경로                                                                          | 설명                                          |
+| ------ | ----------------------------------------------------------------------------- | --------------------------------------------- |
+| GET    | `/api/deals?lat&lng&radius&q&categories&types&sort&active&minDiscount&sample` | 주변 행사 검색 (radius 100~1000)              |
+| POST   | `/api/deals`                                                                  | 행사 제보                                     |
+| POST   | `/api/deals/:id/vote`                                                         | `{"action":"like"\|"confirm"\|"expired"}`     |
+| GET    | `/api/stores?lat&lng&radius&q`                                                | 주변 매장 목록                                |
+| GET    | `/api/prices?lat&lng&radius&q`                                                | 참가격 가격 비교                              |
+| GET    | `/api/geocode?q` / `/api/reverse?lat&lng`                                     | 주소 ↔ 좌표                                   |
+| GET    | `/api/news?q`                                                                 | 네이버 블로그 소식                            |
+| GET    | `/api/config`                                                                 | 반경 옵션, 켜진 데이터 출처, 참가격 갱신 시각 |
+
+GitHub Pages(정적 빌드)에서는 API 서버 없이 `client/src/data/static-api.ts`가 같은 일을 브라우저에서 합니다.
 
 ### 동작 방식 메모
 
+- 참가격은 검색할 때 API 를 부르지 않고 하루 한 번 만든 스냅샷만 읽습니다. 할인 상품은 지난주 같은 매장 가격을 정상가로 보고,
+  반경 안 다른 매장들의 같은 상품 가격으로 평균·최저·최고를 계산합니다.
 - 느린 외부 서버 때문에 화면이 멈추지 않도록 출처마다 기다리는 시간을 정해 두고, 늦으면 먼저 결과를 보여준 뒤
   뒤에서 계속 받아 캐시에 쌓습니다. 화면은 몇 초 뒤 자동으로 다시 검색합니다.
 - OpenStreetMap 매장은 지도를 약 1km 격자로 나눠 칸마다 받아 3일간 디스크에 캐시합니다.

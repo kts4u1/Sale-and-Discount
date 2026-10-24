@@ -17,10 +17,12 @@
     "dev:server": "npm run dev -w server",
     "dev:client": "npm run dev -w client",
     "build": "npm run build -w client",
+    "build:static": "npm run build:static -w client",
     "start": "npm run start -w server",
     "typecheck": "tsc -p shared && tsc -p server && tsc -p client",
     "test": "vitest run",
     "import": "npm run import -w server --",
+    "data:update": "npm run data:update -w server --",
     "format": "prettier --write .",
     "check": "npm run typecheck && npm test && npm run build"
   },

@@ -1,16 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { categoryFromKakao, categoryFromOsm, detectBrand, matchesBrand } from '../src/lib/category.ts';
-import { parseOpenApiItems, OpenApiError } from '../src/lib/xml.ts';
 import {
-  parseKcaCoords,
-  recentFridays,
-  regionAliases,
-  toKcaPrice,
-  toKcaProduct,
-  toKcaStore,
-} from '../src/sources/kca.ts';
+  buildTileQuery,
+  categoryFromKakao,
+  categoryFromOsm,
+  detectBrand,
+  matchesBrand,
+  parseOverpassElements,
+  tilesForCircle,
+  TILE_DEG,
+} from '@sale-radar/shared';
+import { parseOpenApiItems, OpenApiError } from '../src/lib/xml.ts';
+import { parseKcaCoords, recentFridays, toKcaPrice, toKcaProduct, toKcaStore } from '../src/sources/kca.ts';
 import { kakaoPlaceToStore } from '../src/sources/kakao.ts';
-import { buildTileQuery, parseOverpassElements, tilesForCircle, TILE_DEG } from '../src/sources/osm.ts';
 import { formatKoreanAddress } from '../src/sources/nominatim.ts';
 
 describe('브랜드·업종 인식', () => {
@@ -188,11 +189,5 @@ describe('공공데이터 XML (참가격)', () => {
     // 2026-10-24 토요일 → 10/23(금)부터
     expect(recentFridays(3, '2026-10-24')).toEqual(['2026-10-23', '2026-10-16', '2026-10-09']);
     expect(recentFridays(1, '2026-10-23')).toEqual(['2026-10-23']);
-  });
-
-  it('지역 이름 별칭', () => {
-    expect(regionAliases('서울특별시')).toEqual(['서울특별시', '서울']);
-    expect(regionAliases('경상북도')).toEqual(['경상북도', '경상북', '경북']);
-    expect(regionAliases(undefined)).toEqual([]);
   });
 });

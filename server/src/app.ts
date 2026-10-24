@@ -12,11 +12,11 @@ import {
   type SourceStatus,
 } from '@sale-radar/shared';
 import { sampleDefault, type AppConfigEnv } from './config.ts';
-import { SearchService, type Sources } from './services/search.ts';
+import { SearchService, kcaStatus, type Sources } from './services/search.ts';
 import { BrandPromotionSource } from './sources/brand.ts';
 import { GoodPriceSource } from './sources/goodprice.ts';
 import { KakaoSource } from './sources/kakao.ts';
-import { KcaSource, type Geocoder } from './sources/kca.ts';
+import { KcaSource } from './sources/kca.ts';
 import { NaverSource } from './sources/naver.ts';
 import { NominatimSource } from './sources/nominatim.ts';
 import { OsmSource } from './sources/osm.ts';
@@ -39,13 +39,10 @@ export interface AppDeps {
 export function createDeps(config: AppConfigEnv): AppDeps {
   const kakao = new KakaoSource(config);
   const nominatim = new NominatimSource(config);
-  const geocoder: Geocoder = kakao.enabled
-    ? { addressToLatLng: (a) => kakao.addressToLatLng(a), reverse: (c) => kakao.reverse(c), bulk: true }
-    : { addressToLatLng: (a) => nominatim.addressToLatLng(a), reverse: (c) => nominatim.reverse(c), bulk: false };
   const sources: Sources = {
     osm: new OsmSource(config),
     kakao,
-    kca: new KcaSource(config, geocoder),
+    kca: new KcaSource(config.kcaDataDir),
     naver: new NaverSource(config),
     brand: new BrandPromotionSource(config),
     goodprice: new GoodPriceSource(config),
@@ -116,12 +113,13 @@ export function createApp(config: AppConfigEnv, deps: AppDeps = createDeps(confi
         requires,
       });
       const body: AppConfig = {
+        dataMode: 'server',
         radiusOptions: [...RADIUS_OPTIONS],
         defaultRadius: DEFAULT_RADIUS,
         sampleAvailable: config.sampleMode !== 'off',
         sampleDefault: sampleDefault(config),
         sources: [
-          s('kca', sources.kca.enabled, 'DATA_GO_KR_SERVICE_KEY'),
+          kcaStatus(await sources.kca.manifest()),
           s('community', true),
           s('brand', (await sources.brand.count()) > 0),
           s('goodprice', (await sources.goodprice.count()) > 0),

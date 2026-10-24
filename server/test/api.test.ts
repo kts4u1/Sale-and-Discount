@@ -17,6 +17,8 @@ beforeAll(async () => {
   const config = loadConfig({
     dataDir: dir,
     clientDist: path.join(dir, 'no-client'),
+    kcaDataDir: path.join(dir, 'kca'),
+    kcaRawDir: path.join(dir, '.kca-raw'),
     enableOsm: false,
     sampleMode: 'auto',
     dataGoKrKey: undefined,
@@ -56,7 +58,7 @@ describe('API', () => {
     expect(body.sampleDefault).toBe(true);
     expect(body.sources.find((s) => s.id === 'kca')).toMatchObject({
       enabled: false,
-      requires: 'DATA_GO_KR_SERVICE_KEY',
+      requires: 'DATA_GO_KR_KEY',
     });
   });
 

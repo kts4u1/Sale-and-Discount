@@ -1,8 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { type DealView, type Store, type StoreWithDistance } from '@sale-radar/shared';
-import { mergeStores, sameStoreName } from '../src/services/merge.ts';
+import { generateSampleData, mergeStores, sameStoreName } from '@sale-radar/shared';
 import { computeStats, filterDeals, isReportedExpired, sortDeals } from '../src/services/search.ts';
-import { generateSampleData } from '../src/sources/sample.ts';
 import { distanceMeters } from '@sale-radar/shared';
 
 const store = (id: string, name: string, lat: number, lng: number, extra: Partial<Store> = {}): Store => ({

@@ -1,9 +1,15 @@
-import type { GeocodeResult, LatLng, ReverseGeocodeResult, Store } from '@sale-radar/shared';
+import {
+  categoryFromKakao,
+  detectBrand,
+  safeHttpUrl,
+  type GeocodeResult,
+  type LatLng,
+  type ReverseGeocodeResult,
+  type Store,
+} from '@sale-radar/shared';
 import type { AppConfigEnv } from '../config.ts';
 import { TtlCache, gridKey } from '../lib/cache.ts';
-import { categoryFromKakao, detectBrand } from '../lib/category.ts';
 import { fetchJson, mapLimit } from '../lib/http.ts';
-import { safeHttpUrl } from '../lib/url.ts';
 
 const API = 'https://dapi.kakao.com/v2/local';
 

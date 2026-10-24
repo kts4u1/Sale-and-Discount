@@ -1,15 +1,16 @@
-import type { GeocodeResult, LatLng, ReverseGeocodeResult } from '@sale-radar/shared';
+import {
+  formatKoreanAddress,
+  regionsFromNominatim,
+  type GeocodeResult,
+  type LatLng,
+  type NominatimPlace,
+  type ReverseGeocodeResult,
+} from '@sale-radar/shared';
+
+export { formatKoreanAddress } from '@sale-radar/shared';
 import type { AppConfigEnv } from '../config.ts';
 import { TtlCache, gridKey } from '../lib/cache.ts';
 import { fetchJson } from '../lib/http.ts';
-
-interface NominatimPlace {
-  lat: string;
-  lon: string;
-  display_name: string;
-  name?: string;
-  address?: Record<string, string>;
-}
 
 /**
  * OpenStreetMap Nominatim (키 불필요). 사용 정책상 초당 1회로 제한한다.
@@ -78,36 +79,7 @@ export class NominatimSource {
         zoom: '18',
         addressdetails: '1',
       });
-      const a = p.address ?? {};
-      return {
-        address: formatKoreanAddress(p),
-        region1: a.province ?? a.state ?? a.city,
-        region2: a.city_district ?? a.borough ?? a.county ?? a.city,
-        region3: a.quarter ?? a.suburb ?? a.neighbourhood,
-        source: 'nominatim',
-      };
+      return { address: formatKoreanAddress(p), ...regionsFromNominatim(p.address), source: 'nominatim' };
     });
   }
-}
-
-/** Nominatim 의 "건물, 번지, 길, 동, 구, 시, 우편번호, 대한민국" 순서를 한국식으로 뒤집는다 */
-export function formatKoreanAddress(p: NominatimPlace): string {
-  const a = p.address;
-  if (a) {
-    const parts = [
-      a.province ?? a.state,
-      a.city,
-      a.borough ?? a.city_district ?? a.county,
-      a.quarter ?? a.suburb,
-      a.road,
-      a.house_number,
-    ].filter((v, i, arr): v is string => Boolean(v) && arr.indexOf(v) === i);
-    if (parts.length >= 2) return parts.join(' ');
-  }
-  return p.display_name
-    .split(',')
-    .map((s) => s.trim())
-    .filter((s) => s && s !== '대한민국' && !/^\d{5}$/.test(s))
-    .reverse()
-    .join(' ');
 }

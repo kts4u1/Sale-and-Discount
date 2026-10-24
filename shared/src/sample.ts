@@ -1,13 +1,5 @@
-import {
-  addDays,
-  distanceMeters,
-  kstNow,
-  type CategoryId,
-  type Deal,
-  type DealTypeId,
-  type LatLng,
-  type Store,
-} from '@sale-radar/shared';
+import { addDays, distanceMeters, kstNow } from './deal-utils.ts';
+import type { CategoryId, Deal, DealTypeId, LatLng, Store } from './types.ts';
 
 /**
  * 샘플 데이터 생성기.

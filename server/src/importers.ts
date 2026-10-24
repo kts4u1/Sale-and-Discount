@@ -1,8 +1,7 @@
 import { createHash } from 'node:crypto';
 import { normalizeDate, type CategoryId, type DealTypeId, type LatLng, type PriceItem } from '@sale-radar/shared';
-import { categoryFromText } from './lib/category.ts';
+import { categoryFromText, safeHttpUrl } from '@sale-radar/shared';
 import { csvToObjects, pickColumn } from './lib/csv.ts';
-import { safeHttpUrl } from './lib/url.ts';
 import type { BrandPromotion } from './sources/brand.ts';
 import type { GoodPriceStore } from './sources/goodprice.ts';
 

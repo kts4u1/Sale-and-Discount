@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import {
   DEFAULT_CENTER,
   DEFAULT_RADIUS,
+  STALE_DAYS,
   computeDealTiming,
   type AppConfig,
   type CategoryId,
@@ -10,6 +11,7 @@ import {
   type LatLng,
   type SearchResponse,
   type SortId,
+  type VoteAction,
 } from '@sale-radar/shared';
 import { api } from './api.ts';
 import { DealCard, DealSkeleton } from './components/DealCard.tsx';
@@ -21,7 +23,7 @@ import { PriceCompare } from './components/PriceCompare.tsx';
 import { RadiusSelector } from './components/RadiusSelector.tsx';
 import { SourcesSheet } from './components/SourcesSheet.tsx';
 import { SubmitDealSheet } from './components/SubmitDealSheet.tsx';
-import { formatRadius } from './lib/format.ts';
+import { formatRadius, timeAgo } from './lib/format.ts';
 import { GEO_ERROR_TEXT, getCurrentPosition, useDebounced, useMediaQuery, type GeoError } from './lib/hooks.ts';
 import { usePersistentState } from './lib/storage.ts';
 
@@ -215,11 +217,11 @@ export default function App() {
     [setFavorites],
   );
 
-  const onVoted = (dealId: string, counts: { likes: number; confirms: number; expiredReports: number }) => {
-    setData((prev) =>
-      prev ? { ...prev, deals: prev.deals.map((d) => (d.id === dealId ? { ...d, ...counts } : d)) } : prev,
-    );
-    setSelected((s) => (s && s.id === dealId ? { ...s, ...counts } : s));
+  const onVoted = (dealId: string, action: VoteAction) => {
+    const key = action === 'like' ? 'likes' : action === 'confirm' ? 'confirms' : 'expiredReports';
+    const bump = (d: DealView) => (d.id === dealId ? { ...d, [key]: d[key] + 1 } : d);
+    setData((prev) => (prev ? { ...prev, deals: prev.deals.map(bump) } : prev));
+    setSelected((s) => (s ? bump(s) : s));
   };
 
   const resetFilters = () => {
@@ -249,6 +251,9 @@ export default function App() {
   const sampleAvailable = config?.sampleAvailable ?? true;
   const effectiveSample = includeSample ?? config?.sampleDefault ?? true;
   const enabledSources = (data?.sources ?? config?.sources ?? []).filter((s) => s.enabled && s.ok).length;
+  const localOnly = config?.dataMode === 'static';
+  const kcaSource = (data?.sources ?? config?.sources)?.find((s) => s.id === 'kca' && s.enabled && s.updatedAt);
+  const kcaAgeDays = kcaSource?.updatedAt ? Math.floor((Date.now() - Date.parse(kcaSource.updatedAt)) / 86_400_000) : 0;
 
   const map = (
     <MapView
@@ -430,6 +435,13 @@ export default function App() {
                   </div>
                 )}
 
+                {kcaSource && (
+                  <p className={`data-fresh ${kcaAgeDays >= STALE_DAYS ? 'stale' : ''}`}>
+                    📦 참가격 {kcaSource.baseDate} 조사 자료 · {timeAgo(kcaSource.updatedAt!)} 갱신
+                    {kcaAgeDays >= STALE_DAYS && ' · ⚠️ 자동 갱신이 멈춘 것 같아요'}
+                  </p>
+                )}
+
                 {!data && loading && Array.from({ length: 5 }, (_, i) => <DealSkeleton key={i} />)}
 
                 {data && deals.length === 0 && !loading && (
@@ -548,11 +560,14 @@ export default function App() {
         open={sheet === 'submit'}
         center={center}
         centerLabel={centerLabel}
+        localOnly={localOnly}
         presetStore={undefined}
         onClose={() => setSheet(null)}
         onCreated={() => {
           setSheet(null);
-          showToast('제보해 주셔서 고마워요! 목록에 바로 반영했어요.');
+          showToast(
+            localOnly ? '이 기기에 저장했어요. 목록에 바로 보여요.' : '제보해 주셔서 고마워요! 목록에 바로 반영했어요.',
+          );
           setRefreshKey((k) => k + 1);
         }}
       />
