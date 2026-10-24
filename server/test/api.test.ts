@@ -54,7 +54,7 @@ const CENTER = 'lat=37.4979&lng=127.0276';
 describe('API', () => {
   it('설정: 키가 없으면 샘플을 기본으로', async () => {
     const { body } = await get<AppConfig>('/api/config');
-    expect(body.radiusOptions).toEqual([100, 200, 300, 400, 500, 600, 700, 800, 900, 1000]);
+    expect(body.radiusOptions).toEqual([100, 200, 300, 400, 500, 600, 700, 800, 900, 1000, 1500, 2000, 3000, 5000]);
     expect(body.sampleDefault).toBe(true);
     expect(body.sources.find((s) => s.id === 'kca')).toMatchObject({
       enabled: false,
@@ -73,8 +73,9 @@ describe('API', () => {
     expect(large.body.sources.map((s) => s.id)).toContain('osm');
   });
 
-  it('반경은 100m~1km 로 맞춘다', async () => {
-    expect((await get<SearchResponse>(`/api/deals?${CENTER}&radius=5000`)).body.radius).toBe(1000);
+  it('반경은 100m~10km 로 맞춘다', async () => {
+    expect((await get<SearchResponse>(`/api/deals?${CENTER}&radius=5000`)).body.radius).toBe(5000);
+    expect((await get<SearchResponse>(`/api/deals?${CENTER}&radius=50000`)).body.radius).toBe(10000);
     expect((await get<SearchResponse>(`/api/deals?${CENTER}&radius=10`)).body.radius).toBe(100);
   });
 

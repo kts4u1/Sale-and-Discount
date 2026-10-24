@@ -108,7 +108,7 @@ export class SearchService {
     const sampleAllowed = this.config.sampleMode !== 'off';
     const includeSample = sampleAllowed && (query.includeSample ?? sampleDefault(this.config));
 
-    const [osmR, kakaoR, kcaR, communityR, goodR] = await Promise.all([
+    const [osmR, kakaoR, kcaR, chainStores, communityR, goodR] = await Promise.all([
       run(
         'osm',
         osm.enabled,
@@ -128,6 +128,8 @@ export class SearchService {
         () => kca.deals(center, radius),
         (v) => v?.deals.length ?? 0,
       ),
+      // 전국 체인 매장 위치 (본사·체인 공통 행사를 붙일 곳)
+      kca.chainStores(center, radius).catch(() => [] as Store[]),
       run(
         'community',
         true,
@@ -198,6 +200,7 @@ export class SearchService {
         kakaoStores,
         kcaR.value?.stores ?? [],
         osmStores,
+        chainStores,
         goodR.value?.stores ?? [],
         communityR.value?.stores ?? [],
         sample.stores,

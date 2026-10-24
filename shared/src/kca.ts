@@ -1,3 +1,4 @@
+import { detectBrand } from './category.ts';
 import { distanceMeters, normalizeText, walkMinutes } from './deal-utils.ts';
 import { tilesForCircle } from './osm.ts';
 import type { BrandPromotion } from './brand.ts';
@@ -58,7 +59,19 @@ export interface KcaBrandStore {
 
 export interface KcaBrandFile {
   stores: KcaBrandStore[];
+  /** 같은 체인 조사 매장 대부분이 같은 할인을 하는 "체인 공통 행사" (업데이트 때 계산) */
+  chains?: BrandPromotion[];
 }
+
+/** 체인 매장 위치 (OpenStreetMap): [위도, 경도, 브랜드, 이름, OSM id] */
+export type KcaChainStoreTuple = [number, number, string, string, string];
+
+export interface KcaChainTileFile {
+  tile: string;
+  stores: KcaChainStoreTuple[];
+}
+
+export const kcaChainTileFile = (key: string) => `s/${key}.json`;
 
 /** 상품 id → [상품명, 용량] */
 export type KcaProductsFile = Record<string, [string, string?]>;
@@ -85,6 +98,10 @@ export interface KcaManifest {
   };
   /** 격자 → 매장 수 */
   tiles: Record<string, number>;
+  /** 체인 매장 위치 격자 → 매장 수 (편의점·마트 체인, OpenStreetMap) */
+  chainTiles?: Record<string, number>;
+  /** 체인 매장 위치를 받은 시각 */
+  chainStoresUpdatedAt?: string;
   /** 파일 → 내용 해시 (주소의 ?v= 에 붙여 바뀐 파일만 새로 받게) */
   versions: Record<string, string>;
 }
@@ -99,6 +116,114 @@ export function kcaTilesForCircle(manifest: Pick<KcaManifest, 'tiles'>, center: 
   return tilesForCircle(center, radius, KCA_TILE_DEG)
     .map((t) => `${t.lat}_${t.lng}`)
     .filter((key) => manifest.tiles[key] !== undefined);
+}
+
+/** 반경을 덮는 체인 매장 격자 중 자료가 있는 것 */
+export function kcaChainTilesForCircle(
+  manifest: Pick<KcaManifest, 'chainTiles'>,
+  center: LatLng,
+  radius: number,
+): string[] {
+  const tiles = manifest.chainTiles ?? {};
+  return tilesForCircle(center, radius, KCA_TILE_DEG)
+    .map((t) => `${t.lat}_${t.lng}`)
+    .filter((key) => tiles[key] !== undefined);
+}
+
+/** 체인 매장 격자 → 반경 안의 매장 */
+export function chainTilesToStores(tiles: KcaChainTileFile[], center: LatLng, radius: number): Store[] {
+  const out: Store[] = [];
+  for (const tile of tiles) {
+    for (const [lat, lng, brand, name, osmId] of tile.stores) {
+      if (distanceMeters(center, { lat, lng }) > radius) continue;
+      const category = detectBrand(brand)?.category ?? 'mart';
+      out.push({
+        id: `osm:${osmId}`,
+        name,
+        brand,
+        category,
+        categoryDetail: category === 'convenience' ? '편의점' : '마트·슈퍼',
+        lat,
+        lng,
+        sources: ['osm'],
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * 체인 공통 행사 찾기: 같은 체인(이마트, GS더프레시, 롯데슈퍼 …)의 조사 매장 대부분(기본 60% 이상)이
+ * 같은 상품을 같은 기간 할인·1+1 하고 있으면, 조사하지 않은 같은 체인 지점도 같은 행사일 가능성이 높다.
+ */
+export function computeChainPromotions(
+  stores: Pick<KcaSnapshotStore, 'name' | 'brand' | 'category' | 'prices'>[],
+  products: KcaProductsFile,
+  inspectDay: string,
+  options: { minStores?: number; minShare?: number } = {},
+): BrandPromotion[] {
+  const minStores = options.minStores ?? 3;
+  const minShare = options.minShare ?? 0.6;
+  const byBrand = new Map<string, typeof stores>();
+  for (const s of stores) {
+    const brand = s.brand ?? detectBrand(s.name)?.brand;
+    if (!brand) continue;
+    const list = byBrand.get(brand) ?? [];
+    list.push(s);
+    byBrand.set(brand, list);
+  }
+  const out: BrandPromotion[] = [];
+  for (const [brand, list] of byBrand) {
+    if (list.length < minStores) continue;
+    // 상품·종류·기간이 같은 행사를 하는 매장 수
+    const groups = new Map<string, { count: number; prices: number[]; prev: number[]; tuple: KcaPriceTuple }>();
+    for (const s of list) {
+      for (const t of s.prices) {
+        const [goodId, price, flags, dcStart, dcEnd, prevPrice] = t;
+        if (!flags) continue;
+        const key = `${goodId}|${flags}|${dcStart ?? ''}|${dcEnd ?? ''}`;
+        const g = groups.get(key) ?? { count: 0, prices: [], prev: [], tuple: t };
+        g.count += 1;
+        g.prices.push(price);
+        if (prevPrice) g.prev.push(prevPrice);
+        groups.set(key, g);
+      }
+    }
+    for (const g of groups.values()) {
+      if (g.count / list.length < minShare) continue;
+      const [goodId, , flags, dcStart, dcEnd] = g.tuple;
+      const onePlusOne = (flags & KCA_FLAG_ONE_PLUS_ONE) !== 0;
+      const price = mode(g.prices);
+      const prev = g.prev.length ? mode(g.prev) : undefined;
+      out.push({
+        id: `kca-chain-${brand}-${goodId}`,
+        brand,
+        productName: productName(products, goodId),
+        type: onePlusOne ? 'one_plus_one' : 'discount',
+        category: list[0].category,
+        price,
+        originalPrice: prev && prev > price ? prev : undefined,
+        unit: productUnit(products, goodId),
+        startDate: dcStart ?? inspectDay,
+        endDate: dcEnd ?? undefined,
+        description:
+          `한국소비자원 참가격 ${inspectDay} 조사에서 ${brand} 조사 매장 ${list.length}곳 중 ${g.count}곳이 같은 행사를 했어요. ` +
+          `이 지점도 같은 행사일 가능성이 높지만, 매장마다 다를 수 있어요.`,
+        sourceUrl: 'https://www.price.go.kr',
+        tags: ['참가격', '체인 공통'],
+        source: 'kca',
+        updatedAt: `${inspectDay}T00:00:00+09:00`,
+      });
+    }
+  }
+  return out;
+}
+
+/** 가장 자주 나온 값 (같으면 작은 값) */
+function mode(values: number[]): number {
+  const counts = new Map<number, number>();
+  for (const v of values) counts.set(v, (counts.get(v) ?? 0) + 1);
+  return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0] - b[0])[0][0];
 }
 
 export function kcaStoreToStore(s: KcaSnapshotStore): Store {
@@ -254,7 +379,7 @@ export function kcaBrandPromotions(
   products: KcaProductsFile,
   inspectDay: string,
 ): BrandPromotion[] {
-  const out: BrandPromotion[] = [];
+  const out: BrandPromotion[] = [...(file.chains ?? [])];
   for (const s of file.stores) {
     for (const [goodId, price, flags, dcStart, dcEnd, prevPrice] of s.prices) {
       const discount = (flags & KCA_FLAG_DISCOUNT) !== 0;

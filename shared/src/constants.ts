@@ -1,10 +1,17 @@
 import type { CategoryId, DealSource, DealTypeId, SortId, SourceId } from './types.ts';
 
-/** 100m 단위로 1km 까지 선택 */
-export const RADIUS_OPTIONS = [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000] as const;
+/** 1km 까지는 100m 단위, 그 위로는 1.5·2·3·5km */
+export const RADIUS_OPTIONS = [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000, 1500, 2000, 3000, 5000] as const;
 export const MIN_RADIUS = 100;
-export const MAX_RADIUS = 1000;
-export const DEFAULT_RADIUS = 500;
+/** 화면에서 고를 수 있는 최대 반경 */
+export const MAX_SELECTABLE_RADIUS = 5000;
+/** 검색 API 가 받는 최대 반경 (결과가 없을 때 자동으로 넓히는 범위 포함) */
+export const MAX_RADIUS = 10000;
+export const DEFAULT_RADIUS = 1000;
+/** 결과가 하나도 없으면 이 순서로 넓혀서 가장 가까운 행사를 찾는다 */
+export const AUTO_EXPAND_STEPS = [2000, 3000, 5000, 10000] as const;
+/** 주변 매장 지도(OpenStreetMap)를 실시간으로 묻는 최대 반경 (넓으면 너무 느려져서) */
+export const LIVE_STORE_RADIUS = 1000;
 
 /** 성인 평균 보행 속도 약 4km/h */
 export const WALK_METERS_PER_MINUTE = 67;

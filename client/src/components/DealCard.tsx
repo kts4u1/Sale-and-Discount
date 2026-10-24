@@ -1,4 +1,5 @@
 import { CATEGORY_MAP, DEAL_SOURCE_SHORT, type DealView } from '@sale-radar/shared';
+import { travelText } from './RadiusSelector.tsx';
 import { dealBadge, formatDistance, formatPeriod, formatPrice, formatTimeWindow, statusText } from '../lib/format.ts';
 
 interface Props {
@@ -63,7 +64,7 @@ export function DealCard({ deal, saved, onOpen, onToggleSave, highlighted }: Pro
             <span className="dot">·</span>
             <span>{formatDistance(deal.distance)}</span>
             <span className="dot">·</span>
-            <span>도보 {deal.walkMinutes}분</span>
+            <span>{travelText(deal.distance)}</span>
             {deal.otherStores && deal.otherStores.length > 0 && (
               <span className="muted"> 외 {deal.otherStores.length}곳</span>
             )}

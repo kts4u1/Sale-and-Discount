@@ -3,7 +3,10 @@ import {
   addDays,
   categoryFromText,
   detectBrand,
+  chainTilesToStores,
   kcaBrandPromotions,
+  kcaChainTileFile,
+  kcaChainTilesForCircle,
   kcaCompare,
   kcaDeals,
   kcaNearbyStores,
@@ -16,6 +19,7 @@ import {
   type Deal,
   type BrandPromotion,
   type KcaBrandFile,
+  type KcaChainTileFile,
   type KcaManifest,
   type KcaProductsFile,
   type KcaTileFile,
@@ -320,6 +324,7 @@ export class KcaSource {
     );
     if (current && current.mtime === mtime) return this.loaded!;
     this.tiles.clear();
+    this.chainTileCache.clear();
     this.loaded = (async () => {
       if (!mtime) return null;
       const manifest = await readJson<KcaManifest>(manifestPath);
@@ -333,6 +338,30 @@ export class KcaSource {
       return null;
     });
     return this.loaded;
+  }
+
+  private chainTileCache = new Map<string, Promise<KcaChainTileFile | null>>();
+
+  /** 반경 안의 체인 매장 (편의점·마트, 전국 위치를 미리 받아 둔 것) */
+  async chainStores(center: LatLng, radius: number): Promise<Store[]> {
+    const loaded = await this.load();
+    if (!loaded) return [];
+    const keys = kcaChainTilesForCircle(loaded.manifest, center, radius);
+    const tiles = await Promise.all(
+      keys.map((key) => {
+        let p = this.chainTileCache.get(key);
+        if (!p) {
+          p = readJson<KcaChainTileFile>(path.join(this.dir, kcaChainTileFile(key))).then((v) => v ?? null);
+          this.chainTileCache.set(key, p);
+        }
+        return p;
+      }),
+    );
+    return chainTilesToStores(
+      tiles.filter((t): t is KcaChainTileFile => Boolean(t)),
+      center,
+      radius,
+    );
   }
 
   private tile(key: string): Promise<KcaTileFile | null> {

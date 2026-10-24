@@ -10,6 +10,7 @@ import {
 import { api } from '../api.ts';
 import { formatDistance, formatPeriod, formatPrice, formatTimeWindow, statusText, timeAgo } from '../lib/format.ts';
 import { PriceLine } from './DealCard.tsx';
+import { travelText } from './RadiusSelector.tsx';
 import { Sheet } from './Sheet.tsx';
 
 interface Props {
@@ -245,7 +246,7 @@ export function DealDetail({
             <span aria-hidden="true">{cat.emoji}</span> {store.name}
           </h3>
           <p className="muted small">
-            {store.categoryDetail ?? cat.label} · {formatDistance(deal.distance)} · 도보 약 {deal.walkMinutes}분
+            {store.categoryDetail ?? cat.label} · {formatDistance(deal.distance)} · {travelText(deal.distance)}
           </p>
           <ul className="store-info">
             {address && (

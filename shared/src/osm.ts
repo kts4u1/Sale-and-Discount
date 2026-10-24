@@ -1,4 +1,5 @@
 import { categoryFromOsm, detectBrand, osmCategoryDetail } from './category.ts';
+import { LIVE_STORE_RADIUS } from './constants.ts';
 import type { LatLng, Store } from './types.ts';
 import { safeHttpUrl } from './url.ts';
 
@@ -125,7 +126,8 @@ export class OverpassStoreLoader {
 
   async nearbyStores(center: LatLng, radius: number): Promise<{ stores: Store[]; pending: boolean; failed: number }> {
     const budget = this.options.budgetMs ?? 7000;
-    const tiles = tilesForCircle(center, radius);
+    // 넓은 반경은 칸이 너무 많아져서 가까운 1km 까지만 실시간으로 묻는다 (체인 매장은 미리 받아 둔 자료로 채움)
+    const tiles = tilesForCircle(center, Math.min(radius, LIVE_STORE_RADIUS));
     const done = new Map<string, Store[]>();
     let failed = 0;
     let deadline = 0;

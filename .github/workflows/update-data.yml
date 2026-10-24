@@ -42,7 +42,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     outputs:
       pages: ${{ steps.pages.outputs.enabled }}
       data: ${{ steps.result.outputs.data }}
@@ -66,7 +66,8 @@ jobs:
       - name: 참가격 자료 받기
         id: kca
         continue-on-error: true
-        timeout-minutes: 40
+        # 처음이나 매주 한 번은 전국 체인 매장 위치도 받아서 오래 걸릴 수 있다
+        timeout-minutes: 60
         env:
           DATA_GO_KR_KEY: ${{ secrets.DATA_GO_KR_KEY }}
           KAKAO_REST_API_KEY: ${{ secrets.KAKAO_REST_API_KEY }}

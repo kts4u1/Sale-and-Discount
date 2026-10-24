@@ -9,8 +9,13 @@ import {
   KCA_SNAPSHOT_VERSION,
   kcaTileFile,
   kcaTileKey,
+  computeChainPromotions,
+  distanceMeters,
+  kcaChainTileFile,
   type KcaBrandFile,
   type KcaBrandStore,
+  type KcaChainStoreTuple,
+  type KcaChainTileFile,
   type KcaManifest,
   type KcaPriceTuple,
   type KcaProductsFile,
@@ -18,6 +23,7 @@ import {
   type KcaTileFile,
   type LatLng,
 } from '@sale-radar/shared';
+import { loadChainStores } from './chain-stores.ts';
 import { readJson, writeJsonAtomic } from './lib/cache.ts';
 import { mapLimit } from './lib/http.ts';
 import {
@@ -70,6 +76,9 @@ export interface UpdateOptions {
   concurrency?: number;
   retryDelayMs?: number;
   log?: (message: string) => void;
+  /** 전국 체인 매장 위치를 받을 Overpass 서버 (비우면 받지 않음) */
+  overpassEndpoints?: string[];
+  userAgent?: string;
 }
 
 export interface UpdateResult {
@@ -403,9 +412,60 @@ export async function updateKcaSnapshot(options: UpdateOptions): Promise<UpdateR
     products.map((p) => [p.goodId, p.unit ? [p.name, p.unit] : [p.name]] as const),
   );
 
+  // 체인 공통 행사: 같은 체인 조사 매장 대부분이 같은 할인을 하면 다른 지점에도 붙인다
+  const chainCandidates = stores
+    .filter((s) => byStore.has(s.entpId) && !hqIds.has(s.entpId))
+    .map((s) => ({ name: s.name, brand: s.brand, category: s.category, prices: byStore.get(s.entpId)! }));
+  const chains = computeChainPromotions(chainCandidates, productsFile, latest.inspectDay);
+  if (chains.length > 0) {
+    const brands = [...new Set(chains.map((c) => c.brand))];
+    log(`체인 공통 행사 ${chains.length}건 (${brands.join(', ')})`);
+  }
+
+  // 전국 체인 매장 위치 (일주일에 한 번). 이미 조사 매장으로 올라간 지점은 뺀다
+  const chainTiles = new Map<string, KcaChainStoreTuple[]>();
+  let chainStoresUpdatedAt: string | undefined;
+  if (options.overpassEndpoints?.length && !options.offline) {
+    const chainData = await loadChainStores({
+      rawDir: options.rawDir,
+      endpoints: options.overpassEndpoints,
+      userAgent: options.userAgent,
+      log,
+    });
+    if (chainData) {
+      chainStoresUpdatedAt = chainData.fetchedAt;
+      const surveyed = stores.filter((s) => s.located && s.brand);
+      for (const t of chainData.stores) {
+        const [lat, lng, brand] = t;
+        const dup = surveyed.some((s) => s.brand === brand && distanceMeters(s, { lat, lng }) < 150);
+        if (dup) continue;
+        const key = kcaTileKey(lat, lng);
+        const list = chainTiles.get(key) ?? [];
+        list.push(t);
+        chainTiles.set(key, list);
+      }
+    }
+  } else if (options.offline) {
+    const saved = await readJson<{ fetchedAt: string; stores: KcaChainStoreTuple[] }>(
+      path.join(options.rawDir, 'chain-stores.json'),
+    ).catch(() => undefined);
+    if (saved) {
+      chainStoresUpdatedAt = saved.fetchedAt;
+      for (const t of saved.stores) {
+        const key = kcaTileKey(t[0], t[1]);
+        const list = chainTiles.get(key) ?? [];
+        list.push(t);
+        chainTiles.set(key, list);
+      }
+    }
+  }
+
   const files = new Map<string, string>();
   files.set('products.json', JSON.stringify(productsFile));
-  files.set('brands.json', JSON.stringify({ stores: brandStores } satisfies KcaBrandFile));
+  files.set('brands.json', JSON.stringify({ stores: brandStores, chains } satisfies KcaBrandFile));
+  for (const [key, list] of chainTiles) {
+    files.set(kcaChainTileFile(key), JSON.stringify({ tile: key, stores: list } satisfies KcaChainTileFile));
+  }
   for (const [key, list] of tiles) {
     const tile: KcaTileFile = { tile: key, stores: list.sort((a, b) => a.id.localeCompare(b.id)) };
     files.set(kcaTileFile(key), JSON.stringify(tile));
@@ -427,6 +487,9 @@ export async function updateKcaSnapshot(options: UpdateOptions): Promise<UpdateR
       onePlusOne,
     },
     tiles: Object.fromEntries([...tiles].map(([k, l]) => [k, l.length])),
+    ...(chainTiles.size > 0
+      ? { chainTiles: Object.fromEntries([...chainTiles].map(([k, l]) => [k, l.length])), chainStoresUpdatedAt }
+      : {}),
     versions: Object.fromEntries([...files].map(([f, content]) => [f, hash(content)])),
   };
   files.set('manifest.json', JSON.stringify(manifest, null, 1));

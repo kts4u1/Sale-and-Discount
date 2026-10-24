@@ -1,4 +1,4 @@
-import { MAX_RADIUS, MIN_RADIUS, RADIUS_OPTIONS, walkMinutes } from '@sale-radar/shared';
+import { MAX_SELECTABLE_RADIUS, RADIUS_OPTIONS, walkMinutes } from '@sale-radar/shared';
 import { formatRadius } from '../lib/format.ts';
 
 interface Props {
@@ -6,39 +6,44 @@ interface Props {
   onChange: (v: number) => void;
 }
 
-const QUICK = [100, 200, 300, 500, 700, 1000];
+/** 1km 까지는 100m 단위, 그 위로는 1.5·2·3·5km */
+const OPTIONS = RADIUS_OPTIONS.filter((r) => r <= MAX_SELECTABLE_RADIUS);
+const QUICK = [300, 500, 1000, 2000, 3000, 5000];
+const TICKS = new Set([100, 500, 1000, 2000, 5000]);
+
+/** 이동 시간 안내: 가까우면 도보, 멀면 거리만 */
+export function travelText(distance: number): string {
+  const walk = walkMinutes(distance);
+  return walk <= 40 ? `도보 약 ${walk}분` : `차로 약 ${Math.max(5, Math.round((distance * 1.3) / 400))}분`;
+}
 
 export function RadiusSelector({ value, onChange }: Props) {
-  const pct = ((value - MIN_RADIUS) / (MAX_RADIUS - MIN_RADIUS)) * 100;
+  // 목록에 없는 값(예: 예전에 저장된 값)은 가장 가까운 단계로
+  const index = OPTIONS.reduce((best, r, i) => (Math.abs(r - value) < Math.abs(OPTIONS[best] - value) ? i : best), 0);
+  const pct = (index / (OPTIONS.length - 1)) * 100;
   return (
     <div className="radius">
       <div className="radius-head">
         <label htmlFor="radius-range">
           검색 반경 <strong>{formatRadius(value)}</strong>
         </label>
-        <span className="muted small">도보 약 {walkMinutes(value)}분 거리</span>
+        <span className="muted small">{travelText(value)} 거리</span>
       </div>
       <input
         id="radius-range"
         type="range"
-        min={MIN_RADIUS}
-        max={MAX_RADIUS}
-        step={100}
-        value={value}
-        onChange={(e) => onChange(Number(e.target.value))}
+        min={0}
+        max={OPTIONS.length - 1}
+        step={1}
+        value={index}
+        onChange={(e) => onChange(OPTIONS[Number(e.target.value)])}
         style={{ ['--pct' as string]: `${pct}%` }}
-        list="radius-ticks"
         aria-valuetext={formatRadius(value)}
       />
-      <datalist id="radius-ticks">
-        {RADIUS_OPTIONS.map((r) => (
-          <option key={r} value={r} />
-        ))}
-      </datalist>
       <div className="radius-ticks" aria-hidden="true">
-        {RADIUS_OPTIONS.map((r) => (
-          <span key={r} className={r === value ? 'on' : ''}>
-            {r === 1000 ? '1km' : r}
+        {OPTIONS.map((r, i) => (
+          <span key={r} className={i === index ? 'on' : ''}>
+            {TICKS.has(r) || i === index ? formatRadius(r) : '·'}
           </span>
         ))}
       </div>

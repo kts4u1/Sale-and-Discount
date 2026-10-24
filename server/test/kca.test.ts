@@ -116,6 +116,26 @@ describe('참가격 하루 한 번 업데이트', () => {
         }));
         return new Response(wrap(PRICE_TAG, rows));
       }
+      if (url.host === 'overpass.test') {
+        // 체인 매장 위치 (CSV): 역삼 근처 CU 2곳 + 이마트 역삼점과 같은 곳(조사 매장과 겹쳐서 빠져야 함) + 관계없는 가게
+        const rows = [
+          ['node', '11', '37.4990', '127.0300', 'CU', 'CU', '역삼센터점', ''],
+          ['node', '12', '37.5020', '127.0250', 'CU 강남점', '', '', ''],
+          ['node', '13', '37.4985', '127.0281', '이마트', '이마트', '', ''],
+          ['node', '14', '37.4986', '127.0282', '동네 슈퍼', '', '', ''],
+        ];
+        const many = Array.from({ length: 1000 }, (_, i) => [
+          'node',
+          String(1000 + i),
+          '35.1',
+          '129.0',
+          'GS25',
+          'GS25',
+          '',
+          '',
+        ]);
+        return new Response([...rows, ...many].map((r) => r.join('\t')).join('\n'));
+      }
       return new Response('not found', { status: 404 });
     });
   });
@@ -239,6 +259,20 @@ describe('참가격 하루 한 번 업데이트', () => {
     });
     expect(fixed.geocoded).toBe(1);
     expect(fixed.unlocated).toBe(0);
+  });
+
+  it('전국 체인 매장 위치를 받아 본사 행사를 주변 같은 브랜드 매장에 붙인다', async () => {
+    const r = await run({ overpassEndpoints: ['https://overpass.test/api/interpreter'] });
+    expect(r.manifest.chainTiles).toBeDefined();
+    const kca = new KcaSource(outDir);
+    const near = await kca.chainStores({ lat: 37.4979, lng: 127.0276 }, 1000);
+    // CU 2곳만 (이마트는 조사 매장과 같은 지점이라 빠지고, 브랜드가 아닌 가게도 빠짐)
+    expect(near.map((s) => s.name).sort()).toEqual(['CU 강남점', 'CU 역삼센터점']);
+    expect(near[0]).toMatchObject({ brand: 'CU', category: 'convenience', sources: ['osm'] });
+    // 다음 실행은 7일 안이라 다시 받지 않는다
+    calls.length = 0;
+    await run({ overpassEndpoints: ['https://overpass.test/api/interpreter'] });
+    expect(calls.filter((c) => c === 'interpreter')).toHaveLength(0);
   });
 
   it('이미 받아 둔 조사일이면 가격을 다시 받지 않는다', async () => {

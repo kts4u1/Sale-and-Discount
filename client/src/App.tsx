@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   DEFAULT_CENTER,
+  AUTO_EXPAND_STEPS,
   DEFAULT_RADIUS,
+  MAX_SELECTABLE_RADIUS,
+  RADIUS_OPTIONS,
   STALE_DAYS,
   computeDealTiming,
   type AppConfig,
@@ -55,6 +58,8 @@ export default function App() {
   const [activeOnly, setActiveOnly] = useState(false);
   const [minDiscount, setMinDiscount] = useState(0);
   const [includeSample, setIncludeSample] = usePersistentState<boolean | null>('includeSample', null);
+  /** 결과가 없으면 가장 가까운 행사가 나올 때까지 반경을 자동으로 넓힌다 */
+  const [autoExpand, setAutoExpand] = usePersistentState('autoExpand', true);
   const [showFilters, setShowFilters] = useState(false);
 
   // 결과
@@ -153,8 +158,17 @@ export default function App() {
     }
     setLoading(true);
     setError(undefined);
-    api
-      .search(params, ctrl.signal)
+    const run = async () => {
+      let res = await api.search(params, ctrl.signal);
+      if (autoExpand && res.deals.length === 0) {
+        for (const r of AUTO_EXPAND_STEPS.filter((step) => step > params.radius)) {
+          res = await api.search({ ...params, radius: r }, ctrl.signal);
+          if (res.deals.length > 0) break;
+        }
+      }
+      return res;
+    };
+    run()
       .then((res) => {
         setData(res);
         setLoading(false);
@@ -170,7 +184,7 @@ export default function App() {
       });
     return () => ctrl.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [paramsKey, refreshKey]);
+  }, [paramsKey, refreshKey, autoExpand]);
 
   // 아직 불러오는 출처가 있으면 잠시 뒤 다시 검색
   const pending = data?.sources.some((s) => s.pending) ?? false;
@@ -233,6 +247,9 @@ export default function App() {
   };
 
   const deals = data?.deals ?? [];
+  /** 결과가 없어 자동으로 넓힌 반경 (없으면 undefined) */
+  const expandedRadius = data && data.radius > radius ? data.radius : undefined;
+  const shownRadius = expandedRadius ?? radius;
   const stats = data?.stats;
   const sameStore = useMemo(
     () => (selected ? deals.filter((d) => d.storeId === selected.storeId) : []),
@@ -258,7 +275,7 @@ export default function App() {
   const map = (
     <MapView
       center={center}
-      radius={radius}
+      radius={shownRadius}
       deals={deals}
       stores={data?.stores ?? []}
       showAllStores={showAllStores}
@@ -421,10 +438,20 @@ export default function App() {
                   </div>
                 )}
 
+                {expandedRadius && (
+                  <div className="notice info">
+                    선택한 <strong>{formatRadius(radius)}</strong> 안에는 행사가 없어{' '}
+                    <strong>{formatRadius(expandedRadius)}</strong>까지 넓혀서 가장 가까운 행사를 찾았어요.{' '}
+                    <button type="button" className="link-btn" onClick={() => setAutoExpand(false)}>
+                      {formatRadius(radius)} 안만 보기
+                    </button>
+                  </div>
+                )}
+
                 {stats && (
                   <div className="summary">
                     <div>
-                      <strong>{formatRadius(radius)}</strong> 안에서 <strong>{stats.totalDeals}</strong>개 행사
+                      <strong>{formatRadius(shownRadius)}</strong> 안에서 <strong>{stats.totalDeals}</strong>개 행사
                     </div>
                     <div className="summary-stats">
                       <span>🟢 진행 중 {stats.activeNow}</span>
@@ -450,8 +477,17 @@ export default function App() {
                     <h3>조건에 맞는 행사가 없어요</h3>
                     <p className="muted">반경을 넓히거나 필터를 바꿔 보세요. 알고 있는 행사가 있다면 제보해 주세요!</p>
                     <div className="btn-row center">
-                      {radius < 1000 && (
-                        <button type="button" className="btn" onClick={() => setRadius(Math.min(1000, radius + 300))}>
+                      {!autoExpand && (
+                        <button type="button" className="btn primary" onClick={() => setAutoExpand(true)}>
+                          가장 가까운 행사 찾기
+                        </button>
+                      )}
+                      {radius < MAX_SELECTABLE_RADIUS && (
+                        <button
+                          type="button"
+                          className="btn"
+                          onClick={() => setRadius(RADIUS_OPTIONS.find((r) => r > radius && r >= radius * 1.5) ?? 5000)}
+                        >
                           반경 넓히기
                         </button>
                       )}

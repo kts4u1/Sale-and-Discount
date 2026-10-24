@@ -180,9 +180,14 @@ export function assembleSearch(input: AssembleInput): { response: SearchResponse
   const brandDeals = input.brand ? brandPromotionDeals(input.brand, realStores) : [];
 
   const views: DealView[] = [];
+  // 같은 매장의 같은 상품 행사가 여러 출처에서 오면(매장별 조사 + 체인 공통) 먼저 온 것만 쓴다
+  const seen = new Set<string>();
   for (const raw of [...input.deals, ...brandDeals]) {
     const store = resolveStore(raw.storeId);
     if (!store || store.distance > radius) continue;
+    const dedupeKey = `${store.id}|${raw.type}|${raw.productName ?? raw.title}`;
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
     const r = input.reactions?.get(raw.id);
     const deal: Deal = r
       ? {

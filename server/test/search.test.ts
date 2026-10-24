@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { type DealView, type Store, type StoreWithDistance } from '@sale-radar/shared';
-import { generateSampleData, mergeStores, sameStoreName } from '@sale-radar/shared';
+import {
+  assembleSearch,
+  computeChainPromotions,
+  generateSampleData,
+  mergeStores,
+  sameStoreName,
+  type KcaPriceTuple,
+} from '@sale-radar/shared';
+import { parseChainStoresCsv } from '../src/chain-stores.ts';
 import { computeStats, filterDeals, isReportedExpired, sortDeals } from '../src/services/search.ts';
 import { distanceMeters } from '@sale-radar/shared';
 
@@ -185,5 +193,76 @@ describe('샘플 데이터', () => {
     expect(generateSampleData(center, 1000, now).stores.length).toBeGreaterThan(
       generateSampleData(center, 300, now).stores.length,
     );
+  });
+});
+
+describe('체인 공통 행사', () => {
+  const p = (goodId: string, price: number, flags = 1, end = '2026-10-31', prev?: number): KcaPriceTuple =>
+    prev ? [goodId, price, flags, '2026-10-01', end, prev] : [goodId, price, flags, '2026-10-01', end];
+  const products = { '1': ['햇반 210g', '210g'] as [string, string], '2': ['라면'] as [string] };
+
+  it('같은 체인 조사 매장 대부분이 같은 할인을 하면 체인 공통 행사', () => {
+    const stores = [
+      { name: 'GS더프레시 A점', category: 'mart' as const, prices: [p('1', 3990, 1, '2026-10-31', 4980), p('2', 900)] },
+      { name: 'GS더프레시 B점', category: 'mart' as const, prices: [p('1', 3990, 1, '2026-10-31', 4980)] },
+      { name: 'GS더프레시 C점', category: 'mart' as const, prices: [p('1', 4100)] },
+      { name: '롯데슈퍼 D점', category: 'mart' as const, prices: [p('1', 3000)] },
+    ];
+    const promos = computeChainPromotions(stores, products, '2026-10-09');
+    expect(promos).toHaveLength(1);
+    expect(promos[0]).toMatchObject({
+      brand: 'GS더프레시',
+      productName: '햇반 210g',
+      price: 3990,
+      originalPrice: 4980,
+      endDate: '2026-10-31',
+      source: 'kca',
+    });
+    // 3곳 미만인 체인은 판단하지 않는다
+    expect(computeChainPromotions(stores.slice(0, 2), products, '2026-10-09')).toHaveLength(0);
+  });
+
+  it('주변 같은 체인 지점에 붙고, 조사 매장 자체 행사와는 겹치지 않는다', () => {
+    const promo = computeChainPromotions(
+      [1, 2, 3].map((i) => ({ name: `GS더프레시 ${i}점`, category: 'mart' as const, prices: [p('1', 3990)] })),
+      products,
+      '2026-10-09',
+    );
+    const branch = {
+      id: 'osm:node/1',
+      name: 'GS더프레시 우리동네점',
+      brand: 'GS더프레시',
+      category: 'mart' as const,
+      lat: 37.5,
+      lng: 127.0,
+      sources: ['osm' as const],
+    };
+    const now = { date: '2026-10-24', time: '12:00', minutes: 720, weekday: 6 };
+    const { response } = assembleSearch({
+      query: { lat: 37.501, lng: 127.0, radius: 1000 },
+      now,
+      includeSample: false,
+      storeLists: [[branch]],
+      deals: [],
+      brand: { promotions: promo },
+      sources: [],
+    });
+    expect(response.deals).toHaveLength(1);
+    expect(response.deals[0]).toMatchObject({ storeId: 'osm:node/1', title: '햇반 210g 할인', salePrice: 3990 });
+  });
+});
+
+describe('전국 체인 매장 CSV', () => {
+  it('편의점·마트 브랜드만, 지점명 붙이기', () => {
+    const csv = [
+      'node\t1\t37.5\t127.0\tGS25\tGS25\t역삼점\t',
+      'way\t2\t37.6\t127.1\t다이소\t다이소\t\t',
+      'node\t3\t37.7\t127.2\t씨유 강남점\t\t\t',
+      'bad line',
+    ].join('\n');
+    expect(parseChainStoresCsv(csv)).toEqual([
+      [37.5, 127, 'GS25', 'GS25 역삼점', 'node/1'],
+      [37.7, 127.2, 'CU', '씨유 강남점', 'node/3'],
+    ]);
   });
 });

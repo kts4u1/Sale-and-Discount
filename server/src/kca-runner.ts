@@ -46,6 +46,8 @@ export async function runKcaUpdate(config: AppConfigEnv, options: RunOptions = {
     geocodeConcurrency: geo.concurrency,
     force: options.force,
     offline: options.offline,
+    overpassEndpoints: config.enableOsm ? config.overpassEndpoints : [],
+    userAgent: config.userAgent,
     log: options.log,
   });
 }

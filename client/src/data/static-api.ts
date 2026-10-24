@@ -13,7 +13,10 @@ import {
   formatKoreanAddress,
   generateSampleData,
   goodPriceDeals,
+  chainTilesToStores,
   kcaBrandPromotions,
+  kcaChainTileFile,
+  kcaChainTilesForCircle,
   kcaCompare,
   kcaDeals,
   kcaNearbyStores,
@@ -36,6 +39,7 @@ import {
   type GeocodeResult,
   type GoodPriceFile,
   type KcaBrandFile,
+  type KcaChainTileFile,
   type KcaManifest,
   type KcaProductsFile,
   type KcaTileFile,
@@ -96,6 +100,17 @@ function kcaManifest(): Promise<KcaManifest | null> {
 const versioned = (m: KcaManifest, file: string) =>
   `${DATA}kca/${file}?v=${encodeURIComponent(m.versions[file] ?? m.updatedAt)}`;
 
+const chainTileCache = new Map<string, Promise<KcaChainTileFile | null>>();
+function kcaChainTile(m: KcaManifest, key: string): Promise<KcaChainTileFile | null> {
+  const url = versioned(m, kcaChainTileFile(key));
+  let p = chainTileCache.get(url);
+  if (!p) {
+    p = getJson<KcaChainTileFile>(url).catch(() => null);
+    chainTileCache.set(url, p);
+  }
+  return p;
+}
+
 let brandsP: Promise<KcaBrandFile> | null = null;
 function kcaBrands(m: KcaManifest): Promise<KcaBrandFile> {
   brandsP ??= getJson<KcaBrandFile>(versioned(m, 'brands.json')).then(
@@ -141,7 +156,20 @@ async function kcaNearby(center: LatLng, radius: number) {
     center,
     radius,
   );
-  return { manifest: m, products, nearby, brandPromotions: kcaBrandPromotions(brands, products, m.inspectDay) };
+  const chainKeys = kcaChainTilesForCircle(m, center, radius);
+  const chainTiles = await Promise.all(chainKeys.map((k) => kcaChainTile(m, k)));
+  const chainStores = chainTilesToStores(
+    chainTiles.filter((t): t is KcaChainTileFile => Boolean(t)),
+    center,
+    radius,
+  );
+  return {
+    manifest: m,
+    products,
+    nearby,
+    chainStores,
+    brandPromotions: kcaBrandPromotions(brands, products, m.inspectDay),
+  };
 }
 
 let brandP: Promise<BrandPromotionFile> | null = null;
@@ -313,7 +341,14 @@ export const staticApi = {
       query,
       now,
       includeSample,
-      storeLists: [kcaOk?.nearby.map((n) => n.store) ?? [], osmR.stores, goodR.stores, local.stores, sample.stores],
+      storeLists: [
+        kcaOk?.nearby.map((n) => n.store) ?? [],
+        osmR.stores,
+        kcaOk?.chainStores ?? [],
+        goodR.stores,
+        local.stores,
+        sample.stores,
+      ],
       deals: [...kcaDealList, ...localDeals, ...goodR.deals, ...sample.deals],
       brand: { ...brand, promotions: [...brand.promotions, ...(kcaOk?.brandPromotions ?? [])] },
       reactions,
@@ -332,7 +367,7 @@ export const staticApi = {
     const center = { lat, lng };
     const [kca, osmR] = await Promise.all([kcaNearby(center, radius).catch(() => null), osmStores(center, radius)]);
     const local = localData().stores.filter((s) => distanceMeters(center, s) <= radius);
-    const { stores } = mergeStores([kca?.nearby.map((n) => n.store) ?? [], osmR.stores, local]);
+    const { stores } = mergeStores([kca?.nearby.map((n) => n.store) ?? [], osmR.stores, kca?.chainStores ?? [], local]);
     const needle = q ? normalizeText(q) : '';
     return {
       stores: stores
