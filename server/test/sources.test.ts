@@ -231,3 +231,18 @@ describe('전국 체인 매장 칸 나누기', async () => {
     expect(chainBoxQuery([37.5, 126.5, 38, 127])).toContain('[bbox:37.5,126.5,38,127]');
   });
 });
+
+describe('체인 매장 칸 우선순위', async () => {
+  const { koreaBoxes, prioritizeBoxes } = await import('../src/chain-stores.ts');
+  it('조사 매장이 많은 칸부터, 아무것도 없는 칸(바다)은 뺀다', () => {
+    const points = [
+      ...Array.from({ length: 5 }, () => ({ lat: 37.55, lng: 126.98 })), // 서울
+      { lat: 35.16, lng: 129.06 }, // 부산
+    ];
+    const boxes = prioritizeBoxes(koreaBoxes(), points);
+    expect(boxes[0]).toEqual([37.5, 126.5, 38, 127]);
+    expect(boxes.some(([s, w]) => s === 35 && w === 129)).toBe(true);
+    // 서울·부산 칸과 둘레 칸만 (최대 9 + 9)
+    expect(boxes.length).toBeLessThanOrEqual(18);
+  });
+});

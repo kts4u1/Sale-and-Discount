@@ -62,10 +62,46 @@ export interface LoadChainStoresOptions {
   userAgent?: string;
   /** 이 기간 안에 받은 칸은 다시 받지 않는다 (기본 7일) */
   maxAgeMs?: number;
-  /** 이번 실행에서 칸을 받는 데 쓸 최대 시간 (기본 20분). 남은 칸은 다음 실행에서 */
+  /** 이번 실행에서 칸을 받는 데 쓸 최대 시간 (기본 25분). 남은 칸은 다음 실행에서 */
   budgetMs?: number;
+  /** 사람이 사는 곳 위주로: 이 좌표들이 있는 칸과 그 주변 칸만, 좌표가 많은 칸부터 받는다 */
+  focusPoints?: { lat: number; lng: number }[];
   timeoutMs?: number;
   log?: (m: string) => void;
+}
+
+/**
+ * 좌표(예: 참가격 조사 매장)가 있는 칸과 그 둘레 칸만 남기고, 좌표가 많은 칸부터 정렬한다.
+ * 바다·산간 칸을 건너뛰어 서울·부산 같은 곳부터 채운다.
+ */
+export function prioritizeBoxes(
+  boxes: [number, number, number, number][],
+  points?: { lat: number; lng: number }[],
+): [number, number, number, number][] {
+  if (!points || points.length === 0) return boxes;
+  const idx = (b: [number, number, number, number]) => [
+    Math.round(b[0] / CHAIN_BOX_DEG),
+    Math.round(b[1] / CHAIN_BOX_DEG),
+  ];
+  const count = new Map<string, number>();
+  for (const p of points) {
+    const y = Math.floor(p.lat / CHAIN_BOX_DEG);
+    const x = Math.floor(p.lng / CHAIN_BOX_DEG);
+    count.set(`${y}:${x}`, (count.get(`${y}:${x}`) ?? 0) + 1);
+  }
+  const score = (b: [number, number, number, number]) => {
+    const [y, x] = idx(b);
+    let own = count.get(`${y}:${x}`) ?? 0;
+    let near = 0;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) near += count.get(`${y + dy}:${x + dx}`) ?? 0;
+    own = own * 10;
+    return own + near;
+  };
+  return boxes
+    .map((b) => ({ b, s: score(b) }))
+    .filter((x) => x.s > 0)
+    .sort((a, b) => b.s - a.s)
+    .map((x) => x.b);
 }
 
 const inBox = (t: KcaChainStoreTuple, [s, w, n, e]: [number, number, number, number]) =>
@@ -80,9 +116,9 @@ export async function loadChainStores(options: LoadChainStoresOptions): Promise<
   const cache: BoxCache = (await readJson<BoxCache>(file).catch(() => undefined)) ?? { boxes: {} };
   if (!cache.boxes) cache.boxes = {};
   const maxAge = options.maxAgeMs ?? 7 * 86_400_000;
-  const deadline = Date.now() + (options.budgetMs ?? 20 * 60_000);
-  const boxes = koreaBoxes();
+  const deadline = Date.now() + (options.budgetMs ?? 25 * 60_000);
   const keyOf = (b: [number, number, number, number]) => `${b[0]}_${b[1]}`;
+  const boxes = prioritizeBoxes(koreaBoxes(), options.focusPoints);
   const stale = boxes.filter((b) => {
     const c = cache.boxes[keyOf(b)];
     return !c || Date.now() - Date.parse(c.fetchedAt) > maxAge;
@@ -107,7 +143,7 @@ export async function loadChainStores(options: LoadChainStoresOptions): Promise<
               ...(options.userAgent ? { 'User-Agent': options.userAgent } : {}),
             },
             body: new URLSearchParams({ data: query }).toString(),
-            timeoutMs: options.timeoutMs ?? 200_000,
+            timeoutMs: options.timeoutMs ?? 90_000,
           });
           // 서버가 실패를 HTML/오류문으로 돌려주는 경우
           if (/^\s*</.test(text) || /runtime error|Dispatcher/i.test(text.slice(0, 500))) {

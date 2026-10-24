@@ -430,6 +430,8 @@ export async function updateKcaSnapshot(options: UpdateOptions): Promise<UpdateR
       rawDir: options.rawDir,
       endpoints: options.overpassEndpoints,
       userAgent: options.userAgent,
+      // 참가격 조사 매장이 있는 곳(= 사람이 사는 곳)부터
+      focusPoints: stores.filter((s) => s.located),
       log,
     });
     if (chainData) {
