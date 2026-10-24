@@ -3,6 +3,7 @@ import {
   addDays,
   categoryFromText,
   detectBrand,
+  kcaBrandPromotions,
   kcaCompare,
   kcaDeals,
   kcaNearbyStores,
@@ -13,6 +14,8 @@ import {
   KCA_SNAPSHOT_VERSION,
   type CategoryId,
   type Deal,
+  type BrandPromotion,
+  type KcaBrandFile,
   type KcaManifest,
   type KcaProductsFile,
   type KcaTileFile,
@@ -285,6 +288,7 @@ export class KcaClient {
 interface Loaded {
   manifest: KcaManifest;
   products: KcaProductsFile;
+  brands: BrandPromotion[];
   mtime: number;
 }
 
@@ -321,7 +325,9 @@ export class KcaSource {
       const manifest = await readJson<KcaManifest>(manifestPath);
       if (!manifest || manifest.version !== KCA_SNAPSHOT_VERSION) return null;
       const products = (await readJson<KcaProductsFile>(path.join(this.dir, 'products.json'))) ?? {};
-      return { manifest, products, mtime };
+      const brandFile = (await readJson<KcaBrandFile>(path.join(this.dir, 'brands.json'))) ?? { stores: [] };
+      const brands = kcaBrandPromotions(brandFile, products, manifest.inspectDay);
+      return { manifest, products, brands, mtime };
     })().catch((err) => {
       console.warn('[kca] 스냅샷을 읽지 못했습니다:', (err as Error).message);
       return null;
@@ -357,6 +363,11 @@ export class KcaSource {
       stores: r.nearby.map((n) => n.store),
       manifest: r.loaded.manifest,
     };
+  }
+
+  /** 본사(전국 공통) 가격의 할인·1+1 → 브랜드 행사 */
+  async brandPromotions(): Promise<BrandPromotion[]> {
+    return (await this.load())?.brands ?? [];
   }
 
   async stores(center: LatLng, radius: number): Promise<Store[]> {

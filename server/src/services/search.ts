@@ -162,11 +162,13 @@ export class SearchService {
     ];
     // 참가격·샘플 등의 행사에도 사용자 반응(좋아요/확인/종료신고)을 붙인다
     const reactions = await community.reactions(deals.filter((d) => d.source !== 'community').map((d) => d.id));
-    const brandFile = await brand.file();
+    const ownBrand = await brand.file();
+    // 참가격 본사(전국 공통) 가격의 할인·1+1 도 브랜드 행사처럼 주변 같은 브랜드 매장에 붙인다
+    const brandFile = { ...ownBrand, promotions: [...ownBrand.promotions, ...(await kca.brandPromotions())] };
 
     const kcaS = kcaR.status.ok ? kcaStatus(kcaR.value?.manifest ?? null, kcaR.status.count) : kcaR.status;
     const brandStatus = sourceStatus('brand', true, {
-      message: brandFile.promotions.length === 0 ? '등록된 브랜드 행사가 없습니다 (CSV로 추가 가능)' : undefined,
+      message: ownBrand.promotions.length === 0 ? '등록된 브랜드 행사가 없습니다 (CSV로 추가 가능)' : undefined,
     });
     const goodCount = await goodprice.count();
     const sources: SourceStatus[] = [

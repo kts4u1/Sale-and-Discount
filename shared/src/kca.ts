@@ -1,5 +1,6 @@
 import { distanceMeters, normalizeText, walkMinutes } from './deal-utils.ts';
 import { tilesForCircle } from './osm.ts';
+import type { BrandPromotion } from './brand.ts';
 import type { CategoryId, Deal, LatLng, PriceCompareGroup, Store, StoreWithDistance } from './types.ts';
 
 /**
@@ -44,6 +45,21 @@ export interface KcaTileFile {
   stores: KcaSnapshotStore[];
 }
 
+/** 본사(전국 공통 가격) 판매점 — "GS25(본사)" 처럼 브랜드 전체에 적용되는 가격 */
+export interface KcaBrandStore {
+  id: string;
+  name: string;
+  /** 주변 매장과 맞춰 볼 브랜드 이름 (GS25, CU, 세븐일레븐 …) */
+  brand: string;
+  category: CategoryId;
+  typeLabel?: string;
+  prices: KcaPriceTuple[];
+}
+
+export interface KcaBrandFile {
+  stores: KcaBrandStore[];
+}
+
 /** 상품 id → [상품명, 용량] */
 export type KcaProductsFile = Record<string, [string, string?]>;
 
@@ -60,6 +76,8 @@ export interface KcaManifest {
     stores: number;
     /** 좌표를 알아 지도에 올린 매장 */
     located: number;
+    /** 본사(브랜드 공통 가격) 판매점 수 */
+    brands?: number;
     products: number;
     prices: number;
     discounts: number;
@@ -225,6 +243,43 @@ export function kcaCompare(
   });
   result.sort((a, b) => b.entries.length - a.entries.length || a.productName.localeCompare(b.productName, 'ko'));
   return result.slice(0, 30);
+}
+
+/**
+ * 본사 가격의 할인·1+1 을 브랜드 행사로 바꾼다.
+ * 반경 안에 그 브랜드 매장(OpenStreetMap·카카오에서 찾은 GS25, CU …)이 있을 때 가장 가까운 매장에 붙는다.
+ */
+export function kcaBrandPromotions(
+  file: KcaBrandFile,
+  products: KcaProductsFile,
+  inspectDay: string,
+): BrandPromotion[] {
+  const out: BrandPromotion[] = [];
+  for (const s of file.stores) {
+    for (const [goodId, price, flags, dcStart, dcEnd, prevPrice] of s.prices) {
+      const discount = (flags & KCA_FLAG_DISCOUNT) !== 0;
+      const onePlusOne = (flags & KCA_FLAG_ONE_PLUS_ONE) !== 0;
+      if (!discount && !onePlusOne) continue;
+      out.push({
+        id: `kca-${s.id}-${goodId}`,
+        brand: s.brand,
+        productName: productName(products, goodId),
+        type: onePlusOne ? 'one_plus_one' : 'discount',
+        category: s.category,
+        price,
+        originalPrice: prevPrice && prevPrice > price ? prevPrice : undefined,
+        unit: productUnit(products, goodId),
+        startDate: dcStart ?? inspectDay,
+        endDate: dcEnd ?? undefined,
+        description: `한국소비자원 참가격 ${inspectDay} 조사(${s.name}, 전국 공통 가격) 기준입니다. 매장마다 다를 수 있어요.`,
+        sourceUrl: 'https://www.price.go.kr',
+        tags: ['참가격'],
+        source: 'kca',
+        updatedAt: `${inspectDay}T00:00:00+09:00`,
+      });
+    }
+  }
+  return out;
 }
 
 /** 자료가 얼마나 오래됐는지 (일) */

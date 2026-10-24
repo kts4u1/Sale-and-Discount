@@ -9,6 +9,8 @@ import {
   KCA_SNAPSHOT_VERSION,
   kcaTileFile,
   kcaTileKey,
+  type KcaBrandFile,
+  type KcaBrandStore,
   type KcaManifest,
   type KcaPriceTuple,
   type KcaProductsFile,
@@ -52,8 +54,10 @@ export interface UpdateOptions {
   outDir: string;
   /** 원자료 보관 폴더 (예: .kca-raw) */
   rawDir: string;
-  /** 주소 → 좌표 (없으면 좌표가 없는 판매점은 빠진다) */
-  geocode?: (address: string) => Promise<LatLng | null>;
+  /** 주소 → 좌표 (없으면 좌표가 없는 판매점은 빠진다). address 를 돌려주면 시·군·구가 맞는지 확인한다 */
+  geocode?: (address: string) => Promise<(LatLng & { address?: string }) | null>;
+  /** 주소 변환기 이름. 바뀌면(예: OpenStreetMap → 카카오) 전에 못 찾은 주소를 다시 찾는다 */
+  geocoderName?: string;
   /** 이번 실행에서 주소 변환에 쓸 최대 시간 */
   geocodeBudgetMs?: number;
   geocodeConcurrency?: number;
@@ -85,7 +89,45 @@ interface RawPrices {
   prices: KcaPrice[];
 }
 
-type GeocodeCache = Record<string, { address: string; pos: LatLng | null }>;
+type GeocodeCache = Record<string, { address: string; pos: LatLng | null; by?: string; at?: string }>;
+
+/** 못 찾은 주소를 다시 찾아보는 간격 */
+const GEOCODE_RETRY_MS = 7 * 86_400_000;
+
+/** 목록에서 고르게 n 개 */
+export function spreadSample<T>(list: T[], n: number): T[] {
+  if (list.length <= n) return list;
+  return Array.from({ length: n }, (_, i) => list[Math.floor((i * list.length) / n)]);
+}
+
+/** 본사(전국 공통 가격) 판매점인지: "GS25(본사)", "CU(본사)" */
+export const isHeadquarters = (name: string) => /\(\s*본사\s*\)|본사$/.test(name);
+
+/**
+ * 주소 검색이 잘 되도록 주소를 몇 가지 모양으로 다듬는다.
+ *   "서울특별시 서초구 서초중앙로 238 (반포동)" → "서울특별시 서초구 서초중앙로 238"
+ *   "인천광역시 연수구 동춘동  926-9 이마트 이마트 연수점" → "인천광역시 연수구 동춘동 926-9"
+ */
+export function addressVariants(...addresses: (string | undefined)[]): string[] {
+  const out: string[] = [];
+  for (const raw of addresses) {
+    if (!raw) continue;
+    const a = raw.replace(/\s+/g, ' ').trim();
+    const noParen = a.replace(/\s*\([^)]*\)/g, '').trim();
+    const road = noParen.match(/^(.*?\S+(?:로|길)\s?\d+(?:-\d+)?)/)?.[1];
+    const lot = noParen.match(/^(.*?\S+[동리가]\s(?:산\s?)?\d+(?:-\d+)?)/)?.[1];
+    for (const v of [road, lot, noParen, a]) if (v && !out.includes(v)) out.push(v);
+  }
+  return out;
+}
+
+/** 주소의 시·군·구 ("서울특별시 서초구 …" → "서초구") */
+export function districtOf(address: string): string | undefined {
+  return address
+    .split(/\s+/)
+    .slice(1, 3)
+    .find((t) => /[시군구]$/.test(t) && t.length >= 2);
+}
 
 const hash = (s: string) => createHash('sha1').update(s).digest('hex').slice(0, 10);
 
@@ -162,9 +204,9 @@ export async function updateKcaSnapshot(options: UpdateOptions): Promise<UpdateR
         break;
       }
     }
-    // 앞쪽 상품 몇 개로 이 날 자료가 올라왔는지 확인
+    // 목록에서 고르게 고른 상품 몇 개로 이 날 자료가 올라왔는지 확인
     let found = false;
-    for (const goodId of goodIds.slice(0, 5)) {
+    for (const goodId of spreadSample(goodIds, 10)) {
       const rows = await client.pricesByProduct(goodId, day).catch((err) => {
         if (err instanceof KcaApiError && err.fatal) throw err;
         return [];
@@ -192,29 +234,43 @@ export async function updateKcaSnapshot(options: UpdateOptions): Promise<UpdateR
   }
   if (!latest) throw new Error('최근 6주 동안 조사 자료를 찾지 못했습니다');
 
-  // 3) 할인 상품의 지난주 가격 (정상가)
-  const prevDay = addDays(latest.inspectDay, -7);
+  // 3) 할인 상품의 지난 조사 가격 (정상가). 조사가 매주가 아닐 수 있어 4주 전까지 찾아본다
   const discountedIds = [...new Set(latest.prices.filter((p) => p.discount).map((p) => p.goodId))];
-  let prev = existsSync(rawFile(prevDay)) ? await readJson<RawPrices>(rawFile(prevDay)) : undefined;
-  const prevHave = new Set(prev?.prices.map((p) => p.goodId));
-  const prevNeed = options.offline ? [] : discountedIds.filter((id) => !prevHave.has(id) && !prev?.failed.includes(id));
-  if (prevNeed.length > 0) {
-    log(`지난 조사일 ${prevDay}: 할인 상품 ${prevNeed.length}개의 정상가를 받습니다…`);
+  let prev: RawPrices | undefined;
+  let prevDay: string | undefined;
+  for (let week = 1; week <= 4 && discountedIds.length > 0; week++) {
+    const day = addDays(latest.inspectDay, -7 * week);
+    const saved = existsSync(rawFile(day)) ? await readJson<RawPrices>(rawFile(day)) : undefined;
+    if (saved && saved.prices.length > 0) {
+      prev = saved;
+      prevDay = day;
+      break;
+    }
+    if (options.offline) continue;
+    let found = false;
+    for (const goodId of spreadSample(discountedIds, 5)) {
+      const rows = await client.pricesByProduct(goodId, day).catch((err) => {
+        if (err instanceof KcaApiError && err.fatal) throw err;
+        return [];
+      });
+      if (rows.length > 0) {
+        found = true;
+        break;
+      }
+    }
+    if (!found) continue;
+    log(`지난 조사일 ${day}: 할인 상품 ${discountedIds.length}개의 정상가를 받습니다…`);
     try {
-      const got = await fetchDay(client, prevNeed, prevDay, concurrency, log);
-      prev = {
-        inspectDay: prevDay,
-        fetchedAt: got.fetchedAt,
-        products: (prev?.products ?? 0) + got.products,
-        failed: got.failed,
-        prices: [...(prev?.prices ?? []), ...got.prices],
-      };
-      await writeJsonAtomic(rawFile(prevDay), prev);
+      prev = await fetchDay(client, discountedIds, day, concurrency, log);
+      prevDay = day;
+      await writeJsonAtomic(rawFile(day), prev);
     } catch (err) {
       if (err instanceof KcaApiError && err.fatal) throw err;
-      log(`::warning::지난주 가격을 받지 못해 정상가 없이 만듭니다: ${(err as Error).message}`);
+      log(`::warning::지난 조사 가격을 받지 못해 정상가 없이 만듭니다: ${(err as Error).message}`);
     }
+    break;
   }
+  if (discountedIds.length > 0 && !prev) log('::notice::최근 4주 안에 지난 조사 자료가 없어 정상가 없이 만듭니다');
   const prevPrice = new Map<string, number>();
   for (const p of prev?.prices ?? [])
     if (!p.discount && !p.onePlusOne) prevPrice.set(`${p.entpId}:${p.goodId}`, p.price);
@@ -224,6 +280,10 @@ export async function updateKcaSnapshot(options: UpdateOptions): Promise<UpdateR
   const geo = (await readJson<GeocodeCache>(geoFile)) ?? {};
   const addressOf = (s: KcaStore) => s.roadAddress ?? s.address ?? '';
   const pricedStores = new Set(latest.prices.map((p) => p.entpId));
+  // 본사(전국 공통 가격)는 지도에 올리지 않고 주변 같은 브랜드 매장에 붙인다
+  const hq = stores.filter((s) => pricedStores.has(s.entpId) && isHeadquarters(s.name));
+  const hqIds = new Set(hq.map((s) => s.entpId));
+  const geocoderName = options.geocoderName ?? 'geocoder';
   let geocoded = 0;
   for (const s of stores) {
     const cached = geo[s.entpId];
@@ -231,30 +291,60 @@ export async function updateKcaSnapshot(options: UpdateOptions): Promise<UpdateR
       Object.assign(s, { lat: cached.pos.lat, lng: cached.pos.lng, located: true });
     }
   }
+  const needsLookup = (s: KcaStore) => {
+    const c = geo[s.entpId];
+    if (!c || c.address !== addressOf(s)) return true;
+    // 못 찾았던 주소: 변환기가 바뀌었거나 일주일 지나면 다시
+    return !c.pos && (c.by !== geocoderName || !c.at || Date.now() - Date.parse(c.at) > GEOCODE_RETRY_MS);
+  };
   const todo = stores.filter(
-    (s) => !s.located && pricedStores.has(s.entpId) && addressOf(s) && geo[s.entpId]?.address !== addressOf(s),
+    (s) => !s.located && pricedStores.has(s.entpId) && !hqIds.has(s.entpId) && addressOf(s) && needsLookup(s),
   );
+  const unlocatedSample = stores.filter((s) => !s.located && pricedStores.has(s.entpId) && !hqIds.has(s.entpId));
+  if (unlocatedSample.length > 0) {
+    const raw = new Map(storeRows.map((r) => [r.entpId, r]));
+    log(
+      `좌표가 경위도가 아닌 판매점 예: ` +
+        unlocatedSample
+          .slice(0, 3)
+          .map((s) => `${s.name}(x=${raw.get(s.entpId)?.xMapCoord ?? ''}, y=${raw.get(s.entpId)?.yMapCoord ?? ''})`)
+          .join(', '),
+    );
+  }
   if (todo.length > 0 && options.geocode && !options.offline) {
-    log(`좌표가 없는 판매점 ${todo.length}곳의 주소를 좌표로 바꿉니다…`);
+    log(`좌표가 없는 판매점 ${todo.length}곳의 주소를 좌표로 바꿉니다 (${geocoderName})…`);
     const deadline = Date.now() + (options.geocodeBudgetMs ?? 15 * 60_000);
     await mapLimit(todo, options.geocodeConcurrency ?? 1, async (s) => {
       if (Date.now() > deadline) return;
+      const district = districtOf(addressOf(s));
+      let pos: LatLng | null = null;
       try {
-        const pos = await options.geocode!(addressOf(s));
-        geo[s.entpId] = { address: addressOf(s), pos };
-        if (pos) {
-          Object.assign(s, { lat: pos.lat, lng: pos.lng, located: true });
-          geocoded++;
+        for (const variant of addressVariants(s.roadAddress, s.address)) {
+          const hit = await options.geocode!(variant);
+          // 다른 시·군·구로 잘못 찾은 결과는 버린다
+          if (hit && (!hit.address || !district || hit.address.includes(district))) {
+            pos = { lat: hit.lat, lng: hit.lng };
+            break;
+          }
+          if (Date.now() > deadline) break;
         }
       } catch {
-        // 일시적인 오류는 다음 실행에서 다시
+        return; // 일시적인 오류는 다음 실행에서 다시
+      }
+      geo[s.entpId] = { address: addressOf(s), pos, by: geocoderName, at: new Date().toISOString() };
+      if (pos) {
+        Object.assign(s, { lat: pos.lat, lng: pos.lng, located: true });
+        geocoded++;
       }
     });
     await writeJsonAtomic(geoFile, geo);
   }
-  const unlocated = stores.filter((s) => !s.located && pricedStores.has(s.entpId)).length;
+  const unlocated = stores.filter((s) => !s.located && pricedStores.has(s.entpId) && !hqIds.has(s.entpId)).length;
   if (unlocated > 0)
-    log(`::warning::좌표를 모르는 판매점 ${unlocated}곳은 이번 자료에서 빠집니다 (다음 실행에서 다시 시도)`);
+    log(
+      `::warning::좌표를 모르는 판매점 ${unlocated}곳은 이번 자료에서 빠집니다 (다음 실행에서 다시 시도. ` +
+        `KAKAO_REST_API_KEY 를 넣으면 대부분 찾을 수 있어요)`,
+    );
 
   // 5) 스냅샷 만들기
   const byStore = new Map<string, KcaPriceTuple[]>();
@@ -274,9 +364,22 @@ export async function updateKcaSnapshot(options: UpdateOptions): Promise<UpdateR
   }
 
   const tiles = new Map<string, KcaSnapshotStore[]>();
+  const brandStores: KcaBrandStore[] = [];
+  for (const s of hq) {
+    const prices = byStore.get(s.entpId);
+    if (!prices) continue;
+    brandStores.push({
+      id: s.entpId,
+      name: s.name,
+      brand: s.brand ?? s.name.replace(/\(\s*본사\s*\)|본사$/g, '').trim(),
+      category: s.category,
+      ...(s.typeLabel ? { typeLabel: s.typeLabel } : {}),
+      prices: prices.sort((a, b) => a[0].localeCompare(b[0])),
+    });
+  }
   for (const s of stores) {
     const prices = byStore.get(s.entpId);
-    if (!s.located || !prices) continue;
+    if (!s.located || !prices || hqIds.has(s.entpId)) continue;
     const snap: KcaSnapshotStore = {
       id: s.entpId,
       name: s.name,
@@ -302,6 +405,7 @@ export async function updateKcaSnapshot(options: UpdateOptions): Promise<UpdateR
 
   const files = new Map<string, string>();
   files.set('products.json', JSON.stringify(productsFile));
+  files.set('brands.json', JSON.stringify({ stores: brandStores } satisfies KcaBrandFile));
   for (const [key, list] of tiles) {
     const tile: KcaTileFile = { tile: key, stores: list.sort((a, b) => a.id.localeCompare(b.id)) };
     files.set(kcaTileFile(key), JSON.stringify(tile));
@@ -311,11 +415,12 @@ export async function updateKcaSnapshot(options: UpdateOptions): Promise<UpdateR
     version: KCA_SNAPSHOT_VERSION,
     updatedAt: new Date().toISOString(),
     inspectDay: latest.inspectDay,
-    ...(prev ? { prevInspectDay: prevDay } : {}),
+    ...(prev && prevDay ? { prevInspectDay: prevDay } : {}),
     source: '한국소비자원 참가격 (공공데이터포털)',
     totals: {
       stores: pricedStores.size,
       located,
+      brands: brandStores.length,
       products: products.length,
       prices: latest.prices.length,
       discounts,
@@ -340,14 +445,14 @@ export async function updateKcaSnapshot(options: UpdateOptions): Promise<UpdateR
   await rm(old, { recursive: true, force: true });
 
   // 오래된 원자료 정리 (최근 3주만 보관)
-  const keep = new Set([latest.inspectDay, prevDay, addDays(latest.inspectDay, 7)].map((d) => `prices-${d}.json`));
+  const oldest = addDays(latest.inspectDay, -35);
   for (const f of await readdir(options.rawDir)) {
-    if (/^prices-\d{4}-\d{2}-\d{2}\.json$/.test(f) && !keep.has(f))
-      await rm(path.join(options.rawDir, f), { force: true });
+    const day = f.match(/^prices-(\d{4}-\d{2}-\d{2})\.json$/)?.[1];
+    if (day && day < oldest) await rm(path.join(options.rawDir, f), { force: true });
   }
 
   log(
-    `완료: 조사일 ${manifest.inspectDay} · 매장 ${located.toLocaleString()}곳 · 가격 ${manifest.totals.prices.toLocaleString()}건 · ` +
+    `완료: 조사일 ${manifest.inspectDay} · 매장 ${located.toLocaleString()}곳 · 본사(브랜드 공통) ${brandStores.length}곳 · 가격 ${manifest.totals.prices.toLocaleString()}건 · ` +
       `할인 ${discounts.toLocaleString()} · 1+1 ${onePlusOne.toLocaleString()} · API 호출 ${client.calls.total}번`,
   );
   return { manifest, fetchedPrices, apiCalls: client.calls.total, geocoded, unlocated };

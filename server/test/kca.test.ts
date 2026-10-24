@@ -39,6 +39,15 @@ const stores: Record<string, string>[] = [
     roadAddrBasic: '서울특별시 강남구 강남대로 2',
   },
   { entpId: '3', entpName: '부산 먼 마트', entpTypeCode: 'SM', xMapCoord: '129.07', yMapCoord: '35.17' },
+  // 본사: 전국 공통 가격 → 지도에 올리지 않고 주변 CU 매장에 붙인다
+  {
+    entpId: '4',
+    entpName: 'CU(본사)',
+    entpTypeCode: 'CS',
+    xMapCoord: '',
+    yMapCoord: '',
+    roadAddrBasic: '서울특별시 강남구 테헤란로 405',
+  },
 ];
 const products: Record<string, string>[] = [
   { goodId: '10', goodName: '흰우유 1L', goodTotalCnt: '1000', goodTotalDivCode: 'ML' },
@@ -58,6 +67,7 @@ const PRICES: Record<string, Record<string, [string, number, Record<string, stri
     '20': [
       ['1', 4500],
       ['2', 4980],
+      ['4', 1800, { plusoneYn: 'Y' }],
     ],
   },
   '20261016': {
@@ -135,7 +145,7 @@ describe('참가격 하루 한 번 업데이트', () => {
     expect(r.manifest).toMatchObject({
       inspectDay: '2026-10-23',
       prevInspectDay: '2026-10-16',
-      totals: { stores: 3, located: 3, products: 2, prices: 5, discounts: 1, onePlusOne: 1 },
+      totals: { stores: 4, located: 3, brands: 1, products: 2, prices: 6, discounts: 1, onePlusOne: 2 },
     });
     const saved = JSON.parse(await readFile(path.join(outDir, 'manifest.json'), 'utf8')) as KcaManifest;
     expect(saved.versions['products.json']).toMatch(/^[0-9a-f]{10}$/);
@@ -157,6 +167,78 @@ describe('참가격 하루 한 번 업데이트', () => {
     // 원자료 보관
     expect(existsSync(path.join(rawDir, 'prices-2026-10-23.json'))).toBe(true);
     expect(existsSync(path.join(rawDir, 'geocode.json'))).toBe(true);
+  });
+
+  it('본사 가격은 지도 대신 브랜드 행사로', async () => {
+    await run();
+    const brands = JSON.parse(await readFile(path.join(outDir, 'brands.json'), 'utf8'));
+    expect(brands.stores).toEqual([
+      {
+        id: '4',
+        name: 'CU(본사)',
+        brand: 'CU',
+        category: 'convenience',
+        typeLabel: '편의점',
+        prices: [['20', 1800, 2, null, null]],
+      },
+    ]);
+    const promos = await new KcaSource(outDir).brandPromotions();
+    expect(promos).toHaveLength(1);
+    expect(promos[0]).toMatchObject({
+      brand: 'CU',
+      type: 'one_plus_one',
+      price: 1800,
+      productName: '라면 5입',
+      source: 'kca',
+    });
+  });
+
+  it('지난 조사가 2주 전이어도 정상가를 찾는다', async () => {
+    const saved = PRICES['20261016'];
+    delete PRICES['20261016'];
+    PRICES['20261009'] = saved;
+    try {
+      const r = await run();
+      expect(r.manifest.prevInspectDay).toBe('2026-10-09');
+      const tile = JSON.parse(
+        await readFile(
+          path.join(outDir, 't', `${Object.keys(r.manifest.tiles).find((k) => r.manifest.tiles[k] === 2)}.json`),
+          'utf8',
+        ),
+      ) as KcaTileFile;
+      expect(tile.stores.find((s) => s.id === '1')!.prices[0]).toEqual([
+        '10',
+        2200,
+        1,
+        '2026-10-20',
+        '2099-12-31',
+        2800,
+      ]);
+    } finally {
+      delete PRICES['20261009'];
+      PRICES['20261016'] = saved;
+    }
+  });
+
+  it('다른 시·군·구로 잘못 찾은 좌표는 버리고, 변환기가 바뀌면 다시 찾는다', async () => {
+    const wrong = await run({
+      geocoderName: 'OpenStreetMap',
+      geocode: async () => ({ lat: 37.6, lng: 127.0, address: '서울특별시 강북구 어딘가' }),
+    });
+    expect(wrong.geocoded).toBe(0);
+    expect(wrong.unlocated).toBe(1);
+    // 같은 변환기로는 일주일 동안 다시 묻지 않는다
+    let asked = 0;
+    await run({ geocoderName: 'OpenStreetMap', geocode: async () => (asked++, null) });
+    expect(asked).toBe(0);
+    // 카카오로 바뀌면 다시 찾는다
+    const fixed = await run({
+      geocoderName: '카카오',
+      geocode: async (a) =>
+        a.includes('강남대로') ? { lat: 37.499, lng: 127.029, address: '서울특별시 강남구 강남대로 2' } : null,
+    });
+    expect(fixed.geocoded).toBe(1);
+    expect(fixed.unlocated).toBe(0);
   });
 
   it('이미 받아 둔 조사일이면 가격을 다시 받지 않는다', async () => {

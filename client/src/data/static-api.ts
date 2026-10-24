@@ -13,6 +13,7 @@ import {
   formatKoreanAddress,
   generateSampleData,
   goodPriceDeals,
+  kcaBrandPromotions,
   kcaCompare,
   kcaDeals,
   kcaNearbyStores,
@@ -34,6 +35,7 @@ import {
   type DealTypeId,
   type GeocodeResult,
   type GoodPriceFile,
+  type KcaBrandFile,
   type KcaManifest,
   type KcaProductsFile,
   type KcaTileFile,
@@ -94,6 +96,15 @@ function kcaManifest(): Promise<KcaManifest | null> {
 const versioned = (m: KcaManifest, file: string) =>
   `${DATA}kca/${file}?v=${encodeURIComponent(m.versions[file] ?? m.updatedAt)}`;
 
+let brandsP: Promise<KcaBrandFile> | null = null;
+function kcaBrands(m: KcaManifest): Promise<KcaBrandFile> {
+  brandsP ??= getJson<KcaBrandFile>(versioned(m, 'brands.json')).then(
+    (v) => v ?? { stores: [] },
+    () => ({ stores: [] }),
+  );
+  return brandsP;
+}
+
 let productsP: Promise<KcaProductsFile> | null = null;
 function kcaProducts(m: KcaManifest): Promise<KcaProductsFile> {
   productsP ??= getJson<KcaProductsFile>(versioned(m, 'products.json'))
@@ -120,8 +131,9 @@ function kcaTile(m: KcaManifest, key: string): Promise<KcaTileFile | null> {
 async function kcaNearby(center: LatLng, radius: number) {
   const m = await kcaManifest();
   if (!m) return null;
-  const [products, tiles] = await Promise.all([
+  const [products, brands, tiles] = await Promise.all([
     kcaProducts(m),
+    kcaBrands(m),
     Promise.all(kcaTilesForCircle(m, center, radius).map((k) => kcaTile(m, k))),
   ]);
   const nearby = kcaNearbyStores(
@@ -129,7 +141,7 @@ async function kcaNearby(center: LatLng, radius: number) {
     center,
     radius,
   );
-  return { manifest: m, products, nearby };
+  return { manifest: m, products, nearby, brandPromotions: kcaBrandPromotions(brands, products, m.inspectDay) };
 }
 
 let brandP: Promise<BrandPromotionFile> | null = null;
@@ -303,7 +315,7 @@ export const staticApi = {
       includeSample,
       storeLists: [kcaOk?.nearby.map((n) => n.store) ?? [], osmR.stores, goodR.stores, local.stores, sample.stores],
       deals: [...kcaDealList, ...localDeals, ...goodR.deals, ...sample.deals],
-      brand,
+      brand: { ...brand, promotions: [...brand.promotions, ...(kcaOk?.brandPromotions ?? [])] },
       reactions,
       sources,
     });

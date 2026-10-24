@@ -12,6 +12,7 @@ import {
 import { parseOpenApiItems, OpenApiError } from '../src/lib/xml.ts';
 import { parseKcaCoords, recentFridays, toKcaPrice, toKcaProduct, toKcaStore } from '../src/sources/kca.ts';
 import { kakaoPlaceToStore } from '../src/sources/kakao.ts';
+import { addressVariants, districtOf, isHeadquarters, spreadSample } from '../src/kca-update.ts';
 import { formatKoreanAddress } from '../src/sources/nominatim.ts';
 
 describe('브랜드·업종 인식', () => {
@@ -189,5 +190,31 @@ describe('공공데이터 XML (참가격)', () => {
     // 2026-10-24 토요일 → 10/23(금)부터
     expect(recentFridays(3, '2026-10-24')).toEqual(['2026-10-23', '2026-10-16', '2026-10-09']);
     expect(recentFridays(1, '2026-10-23')).toEqual(['2026-10-23']);
+  });
+});
+
+describe('참가격 판매점 주소·본사', () => {
+  it('주소를 검색하기 좋게 다듬는다', () => {
+    expect(
+      addressVariants('서울특별시 서초구 서초중앙로 238 (반포동)', '서울특별시 서초구 반포동  19-3 GS더프레시'),
+    ).toEqual([
+      '서울특별시 서초구 서초중앙로 238',
+      '서울특별시 서초구 서초중앙로 238 (반포동)',
+      '서울특별시 서초구 반포동 19-3',
+      '서울특별시 서초구 반포동 19-3 GS더프레시',
+    ]);
+    expect(districtOf('인천광역시 연수구 경원대로 184')).toBe('연수구');
+    expect(districtOf('경기도 성남시 분당구 정자로 1')).toBe('성남시');
+  });
+
+  it('본사 판매점', () => {
+    expect(isHeadquarters('GS25(본사)')).toBe(true);
+    expect(isHeadquarters('세븐일레븐 (본사)')).toBe(true);
+    expect(isHeadquarters('GS25 역삼점')).toBe(false);
+  });
+
+  it('목록에서 고르게', () => {
+    expect(spreadSample([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 3)).toEqual([1, 4, 7]);
+    expect(spreadSample([1, 2], 5)).toEqual([1, 2]);
   });
 });

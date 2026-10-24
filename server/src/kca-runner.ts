@@ -9,16 +9,21 @@ import { KakaoSource } from './sources/kakao.ts';
 import { NominatimSource } from './sources/nominatim.ts';
 import type { KcaManifest } from '@sale-radar/shared';
 
-/** 주소 → 좌표: 카카오 키가 있으면 카카오(빠름), 없으면 OpenStreetMap(초당 1건) */
+/** 주소 → 좌표: 카카오 키가 있으면 카카오(정확·빠름), 없으면 OpenStreetMap(초당 1건, 한국 주소는 못 찾는 경우가 많음) */
 export function makeGeocoder(config: AppConfigEnv): {
-  geocode: (a: string) => Promise<LatLng | null>;
+  geocode: (a: string) => Promise<(LatLng & { address?: string }) | null>;
   concurrency: number;
   name: string;
 } {
   const kakao = new KakaoSource(config);
   if (kakao.enabled) return { geocode: (a) => kakao.addressToLatLng(a), concurrency: 4, name: '카카오' };
   const nominatim = new NominatimSource(config);
-  return { geocode: (a) => nominatim.addressToLatLng(a), concurrency: 1, name: 'OpenStreetMap' };
+  return {
+    // 결과 주소를 함께 돌려줘서, 다른 시·군·구로 잘못 찾은 결과를 걸러낸다
+    geocode: async (a) => (await nominatim.geocode(a))[0] ?? null,
+    concurrency: 1,
+    name: 'OpenStreetMap',
+  };
 }
 
 export interface RunOptions {
@@ -37,6 +42,7 @@ export async function runKcaUpdate(config: AppConfigEnv, options: RunOptions = {
     outDir: config.kcaDataDir,
     rawDir: config.kcaRawDir,
     geocode: geo.geocode,
+    geocoderName: geo.name,
     geocodeConcurrency: geo.concurrency,
     force: options.force,
     offline: options.offline,

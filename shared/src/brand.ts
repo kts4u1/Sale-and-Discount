@@ -1,5 +1,5 @@
 import { matchesBrand } from './category.ts';
-import type { CategoryId, Deal, DealTypeId, StoreWithDistance } from './types.ts';
+import type { CategoryId, Deal, DealSource, DealTypeId, StoreWithDistance } from './types.ts';
 
 /**
  * 브랜드 단위 행사 (예: 편의점 1+1·2+1, 프랜차이즈 할인).
@@ -22,6 +22,10 @@ export interface BrandPromotion {
   description?: string;
   sourceUrl?: string;
   tags?: string[];
+  /** 출처 (기본: 브랜드 행사). 참가격 본사 가격이면 kca */
+  source?: DealSource;
+  /** 자료 갱신 시각 (ISO) */
+  updatedAt?: string;
 }
 
 export interface BrandPromotionFile {
@@ -75,11 +79,11 @@ export function brandPromotionDeals(data: BrandPromotionFile, nearbyStores: Stor
       startDate: promo.startDate,
       endDate: promo.endDate,
       tags: [promo.brand, ...(promo.tags ?? [])],
-      source: 'brand',
+      source: promo.source ?? 'brand',
       sourceUrl: promo.sourceUrl,
       otherStoreIds: others.map((s) => s.id),
-      createdAt: updatedAt,
-      updatedAt,
+      createdAt: promo.updatedAt ?? updatedAt,
+      updatedAt: promo.updatedAt ?? updatedAt,
       likes: 0,
       confirms: 0,
       expiredReports: 0,
