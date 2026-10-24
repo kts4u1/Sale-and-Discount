@@ -1,0 +1,4 @@
+brand,productName,type,price,originalPrice,unit,startDate,endDate,category,description
+GS25,예시 탄산음료,two_plus_one,2200,,500ml,2026-11-01,2026-11-30,convenience,예시 행입니다. 실제 행사로 바꿔 주세요.
+CU,예시 컵라면,one_plus_one,1800,,큰컵,2026-11-01,2026-11-30,convenience,예시 행입니다. 실제 행사로 바꿔 주세요.
+세븐일레븐,예시 도시락,discount,4500,5500,,2026-11-01,2026-11-15,convenience,예시 행입니다. 실제 행사로 바꿔 주세요.

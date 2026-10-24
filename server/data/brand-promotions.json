@@ -1,0 +1,5 @@
+{
+  "updatedAt": "",
+  "notice": "브랜드 공통 행사(편의점 1+1·2+1 등) 목록입니다. server/data/examples/brand-promotions.example.csv 형식의 CSV를 'npm run import -- promotions 파일.csv' 로 불러오면 이 파일이 채워집니다.",
+  "promotions": []
+}
